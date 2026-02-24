@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `compact` — runs compaction on a table, a list of tables, or a full database.
   - `rollback` — restores a table to its exact pre-compaction state.
   - `cleanup` — removes backup tables and reclaims HDFS space; supports age filtering (`--older-than 7d`).
-- **Automatic spark-submit launch** — when `spark_submit.enabled: true` is set in the YAML config, the CLI automatically builds and executes the full `spark-submit` command (Kerberos principal/keytab, YARN queue, conda archives, executor resources, extra `--conf` pairs). The `BEEKEEPER_SUBMITTED` environment variable prevents infinite re-submission.
+- **Automatic spark-submit launch** — when `spark_submit.enabled: true` is set in the YAML config, the CLI automatically builds and executes the full `spark-submit` command (Kerberos principal/keytab, YARN queue, conda archives, executor resources, extra `--conf` pairs). The `LAKEKEEPER_SUBMITTED` environment variable prevents infinite re-submission.
 - **YAML configuration** — all parameters configurable via a YAML file; CLI flags override YAML values.
 - **Python 3.9+ support** — compatible with Cloudera CDP 7.1.9, Hortonworks HDP, and vanilla Hadoop distributions.
 

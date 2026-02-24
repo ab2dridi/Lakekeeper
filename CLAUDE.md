@@ -111,7 +111,7 @@ python -m build
 python -m twine upload dist/lakekeeper-<version>*
 ```
 
-Current published version: 0.0.1. Next planned: 0.0.2 (cluster-mode fix + backup fix).
+Current published version: 0.0.3.
 
 ## Files of note
 

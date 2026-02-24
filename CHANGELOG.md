@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.0.3] - 2026-02-24
+
+### Fixed
+
+- **Partitioned table treated as non-partitioned** — on some Hive 3 / SparkSQL 3.3.x versions, the `# Partition Information` block is absent from `DESCRIBE FORMATTED` output. This caused multi-level partitioned tables (e.g. `date=*/ref=*`) to be compacted as non-partitioned, collapsing all data into a single flat file at the table root and destroying the partition structure entirely. Fixed by adding a `SHOW PARTITIONS` fallback: if `DESCRIBE FORMATTED` returns no partition columns, `SHOW PARTITIONS` is called; it raises `AnalysisException` on non-partitioned tables, making it a reliable disambiguator.
+
+[0.0.3]: https://github.com/ab2dridi/Lakekeeper/releases/tag/v0.0.3
+
+---
+
 ## [0.0.2] - 2026-02-24
 
 ### Fixed

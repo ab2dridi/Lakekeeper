@@ -198,7 +198,10 @@ class TestBackupManager:
         returns a DDL that contains TBLPROPERTIES ('external.table.purge'='true').
         The backup DDL inherits this, but the subsequent ALTER TABLE must override it
         so the backup table never deletes data when dropped.
+
+        CRITICAL: The original table's purge property must NEVER be modified.
         """
+        original_table = "mydb.events"
         sample_ddl = (
             "CREATE EXTERNAL TABLE `mydb`.`events` (`id` INT) "
             "STORED AS PARQUET "
@@ -211,20 +214,30 @@ class TestBackupManager:
         backup_info = backup_mgr.create_backup(sample_table_info)
 
         calls = [str(c) for c in mock_spark.sql.call_args_list]
-        # The backup DDL (derived from original) will contain purge='true' initially
-        create_calls = [c for c in calls if "__bkp_events_" in c and "SET TBLPROPERTIES" not in c]
-        assert len(create_calls) == 1
-        assert "purge'='true'" in create_calls[0] or "purge'='true" in create_calls[0] or "purge'='true'" in create_calls[0]
-        # The ALTER TABLE call MUST set it to 'false' — this is the safety guarantee
+
+        # The ALTER TABLE call MUST set purge='false' on the BACKUP table only
         alter_tblprops = [c for c in calls if "SET TBLPROPERTIES" in c]
         assert len(alter_tblprops) == 1
         assert "external.table.purge" in alter_tblprops[0]
         assert "'false'" in alter_tblprops[0]
-        # Backup table name is correct
+        assert "__bkp_events_" in alter_tblprops[0], "SET TBLPROPERTIES must target the backup table, not the original"
+
+        # CRITICAL: the original table MUST NEVER be subject to SET TBLPROPERTIES
+        original_modified = [
+            c for c in calls
+            if "SET TBLPROPERTIES" in c and original_table in c and "__bkp_" not in c
+        ]
+        assert original_modified == [], (
+            f"Original table '{original_table}' must never have its TBLPROPERTIES modified: {original_modified}"
+        )
         assert backup_info.backup_table.startswith("mydb.__bkp_events_")
 
     def test_create_backup_original_purge_true_partitioned(self, backup_mgr, mock_spark, sample_partitioned_table_info):
-        """Partitioned table with purge='true': backup must always have purge='false'."""
+        """Partitioned table with purge='true': backup must always have purge='false'.
+
+        CRITICAL: The original table's purge property must NEVER be modified.
+        """
+        original_table = "mydb.logs"
         sample_ddl = (
             "CREATE EXTERNAL TABLE `mydb`.`logs` (`id` INT) "
             "PARTITIONED BY (`year` STRING, `month` STRING) "
@@ -238,11 +251,55 @@ class TestBackupManager:
         backup_mgr.create_backup(sample_partitioned_table_info)
 
         calls = [str(c) for c in mock_spark.sql.call_args_list]
+
+        # The ALTER TABLE call MUST set purge='false' on the BACKUP table only
         alter_tblprops = [c for c in calls if "SET TBLPROPERTIES" in c]
         assert len(alter_tblprops) == 1
         assert "external.table.purge" in alter_tblprops[0]
         assert "'false'" in alter_tblprops[0]
-        # Sanity: ALTER TABLE for purge=false comes AFTER the CREATE
+        assert "__bkp_logs_" in alter_tblprops[0], "SET TBLPROPERTIES must target the backup table, not the original"
+
+        # CRITICAL: the original table MUST NEVER be subject to SET TBLPROPERTIES
+        original_modified = [
+            c for c in calls
+            if "SET TBLPROPERTIES" in c and original_table in c and "__bkp_" not in c
+        ]
+        assert original_modified == [], (
+            f"Original table '{original_table}' must never have its TBLPROPERTIES modified: {original_modified}"
+        )
+
+        # ALTER TABLE for purge=false comes AFTER the CREATE
         create_idx = next(i for i, c in enumerate(calls) if "__bkp_logs_" in c and "SET TBLPROPERTIES" not in c)
         alter_idx = next(i for i, c in enumerate(calls) if "SET TBLPROPERTIES" in c and "external.table.purge" in c)
         assert alter_idx > create_idx, "ALTER TABLE purge='false' must come AFTER the CREATE"
+
+    def test_original_table_tblproperties_never_modified(self, backup_mgr, mock_spark, sample_table_info):
+        """Exhaustive regression guard: no SQL call must apply SET TBLPROPERTIES to the original table.
+
+        Lakekeeper NEVER modifies the TBLPROPERTIES of the original table,
+        regardless of the original purge setting ('true' or 'false').
+        Only the backup table gets SET TBLPROPERTIES ('external.table.purge'='false').
+        """
+        original_table = "mydb.events"
+        for purge_value in ("'true'", "'false'"):
+            mock_spark.sql.reset_mock()
+            sample_ddl = (
+                f"CREATE EXTERNAL TABLE `mydb`.`events` (`id` INT) "
+                f"STORED AS PARQUET "
+                f"LOCATION 'hdfs:///data/mydb/events' "
+                f"TBLPROPERTIES ('external.table.purge'={purge_value})"
+            )
+            ddl_row = MagicMock(__getitem__=lambda self, i, ddl=sample_ddl: ddl)
+            mock_spark.sql.return_value.collect.return_value = [ddl_row]
+
+            backup_mgr.create_backup(sample_table_info)
+
+            calls = [str(c) for c in mock_spark.sql.call_args_list]
+            violating = [
+                c for c in calls
+                if "SET TBLPROPERTIES" in c and original_table in c and "__bkp_" not in c
+            ]
+            assert violating == [], (
+                f"With purge={purge_value}: original table TBLPROPERTIES must never be modified, "
+                f"but found: {violating}"
+            )

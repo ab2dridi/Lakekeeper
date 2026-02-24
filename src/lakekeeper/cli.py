@@ -11,7 +11,7 @@ import click
 from lakekeeper import __version__
 from lakekeeper.config import LakekeeperConfig
 from lakekeeper.core.reporter import print_analysis_report, print_compaction_report
-from lakekeeper.models import CompactionStatus
+from lakekeeper.models import CompactionStatus, SkipTableError
 
 _SUBMITTED_ENV = "LAKEKEEPER_SUBMITTED"
 
@@ -19,7 +19,10 @@ _SUBMITTED_ENV = "LAKEKEEPER_SUBMITTED"
 def _build_config(ctx: click.Context) -> LakekeeperConfig:
     """Build config from YAML file and CLI overrides."""
     params = ctx.params
-    config_file = params.get("config_file")
+    # --config-file may appear before the subcommand (group level, stored in
+    # ctx.obj) or after it (subcommand level, in ctx.params).
+    # Subcommand-level takes precedence.
+    config_file = params.get("config_file") or (ctx.obj or {}).get("config_file")
 
     if config_file:
         config = LakekeeperConfig.from_yaml(config_file)
@@ -105,8 +108,12 @@ def _resolve_tables(config: LakekeeperConfig, engine) -> list[tuple[str, str]]: 
 
 @click.group()
 @click.version_option(version=__version__, prog_name="lakekeeper")
-def main() -> None:
+@click.option("--config-file", "-c", default=None, metavar="PATH", help="YAML configuration file.")
+@click.pass_context
+def main(ctx: click.Context, config_file: str | None) -> None:
     """Lakekeeper - Safe compaction of Hive external tables."""
+    ctx.ensure_object(dict)
+    ctx.obj["config_file"] = config_file
 
 
 @main.command()
@@ -131,7 +138,11 @@ def analyze(ctx: click.Context, **kwargs: str | None) -> None:
 
     click.echo(f"Analyzing {len(tables)} table(s)...\n")
     for database, table_name in tables:
-        table_info = engine.analyze(database, table_name)
+        try:
+            table_info = engine.analyze(database, table_name)
+        except SkipTableError as e:
+            click.echo(f"  Skipping {database}.{table_name}: {e}")
+            continue
         print_analysis_report(table_info)
 
 
@@ -159,7 +170,11 @@ def compact(ctx: click.Context, **kwargs: str | None) -> None:
     click.echo(f"Processing {len(tables)} table(s)...\n")
     any_failed = False
     for database, table_name in tables:
-        table_info = engine.analyze(database, table_name)
+        try:
+            table_info = engine.analyze(database, table_name)
+        except SkipTableError as e:
+            click.echo(f"  Skipping {database}.{table_name}: {e}")
+            continue
         print_analysis_report(table_info)
 
         if not table_info.needs_compaction:

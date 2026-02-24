@@ -30,7 +30,8 @@ Lakekeeper solves this **without touching the table's Metastore location**.
 Lakekeeper compacts Hive external tables safely:
 
 - **No `saveAsTable`** — the table's Metastore location never changes, preserving lineage and catalog properties (Apache Atlas and compatible systems)
-- **Zero-copy backups** — `CREATE EXTERNAL TABLE LIKE` pointing to the original location, no data duplication
+- **Zero-copy backups** — DDL clone (`SHOW CREATE TABLE`) pointing to the original location, no data duplication
+- **External tables only** — MANAGED tables are detected and skipped automatically
 - **Per-partition compaction** — only compacts partitions that exceed the small-file threshold, untouched partitions are skipped
 - **Dynamic target file count** — computed from actual data size and configured HDFS block size
 - **Row count verification** — aborts and rolls back automatically if counts do not match after compaction
@@ -189,8 +190,9 @@ spark-submit \
 lakekeeper [OPTIONS] COMMAND [ARGS]...
 
 Options:
-  --version  Show version and exit.
-  --help     Show help and exit.
+  -c, --config-file PATH  YAML configuration file.
+  --version               Show version and exit.
+  --help                  Show help and exit.
 
 Commands:
   analyze   Analyze tables and report compaction needs (dry-run, no writes).
@@ -198,6 +200,10 @@ Commands:
   rollback  Rollback a table to its pre-compaction state.
   cleanup   Remove backup tables and reclaim HDFS space.
 ```
+
+> **`--config-file` placement:** Pass it before the subcommand name:
+> `lakekeeper --config-file lakekeeper.yaml compact --table mydb.events`
+> It can also be placed after the subcommand for backward compatibility.
 
 ### analyze
 
@@ -263,6 +269,7 @@ lakekeeper cleanup --database mydb --older-than 7d  # remove backups older than 
 | `driver_memory` | — | `--driver-memory` |
 | `script_path` | `run_lakekeeper.py` | Path to the entry-point script passed to spark-submit |
 | `extra_conf` | `{}` | Additional `--conf key=value` pairs |
+| `extra_files` | `[]` | Files distributed to executors via `--files` (e.g. `hive-site.xml`) |
 
 ---
 

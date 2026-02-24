@@ -124,6 +124,45 @@ class TestTableAnalyzer:
         with pytest.raises(ValueError, match="Could not detect file format"):
             analyzer.analyze_table("mydb", "t")
 
+    def test_analyze_managed_table_raises(self, analyzer, mock_spark):
+        """MANAGED tables must be rejected — only EXTERNAL tables are supported."""
+        from lakekeeper.models import SkipTableError
+
+        desc_rows = [
+            _make_row("Location", "hdfs:///data/mydb/managed", None),
+            _make_row("Table Type", "MANAGED_TABLE", None),
+            _make_row("InputFormat", "org.apache.hadoop.hive.ql.io.parquet.MapRedParquetInputFormat", None),
+        ]
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+
+        with pytest.raises(SkipTableError, match="not an external table"):
+            analyzer.analyze_table("mydb", "managed")
+
+    def test_analyze_external_table_not_skipped(self, analyzer, mock_spark, mock_hdfs_client):
+        """EXTERNAL_TABLE must not be skipped."""
+        desc_rows = [
+            _make_row("Location", "hdfs:///data/mydb/ext", None),
+            _make_row("Table Type", "EXTERNAL_TABLE", None),
+            _make_row("InputFormat", "org.apache.hadoop.hive.ql.io.parquet.MapRedParquetInputFormat", None),
+        ]
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=1024)
+
+        result = analyzer.analyze_table("mydb", "ext")
+        assert result.database == "mydb"
+
+    def test_analyze_unknown_type_not_skipped(self, analyzer, mock_spark, mock_hdfs_client):
+        """When Table Type is absent, do not skip (be permissive about unknown clusters)."""
+        desc_rows = [
+            _make_row("Location", "hdfs:///data/mydb/ext", None),
+            _make_row("InputFormat", "org.apache.hadoop.hive.ql.io.parquet.MapRedParquetInputFormat", None),
+        ]
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=1024)
+
+        result = analyzer.analyze_table("mydb", "ext")
+        assert result.database == "mydb"
+
 
 class TestParsePartitionSpec:
     def test_single_partition(self):

@@ -7,7 +7,7 @@ import math
 import re
 from typing import TYPE_CHECKING
 
-from lakekeeper.models import FileFormat, PartitionInfo, TableInfo
+from lakekeeper.models import FileFormat, PartitionInfo, SkipTableError, TableInfo
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -57,6 +57,15 @@ class TableAnalyzer:
 
         desc_rows = self._spark.sql(f"DESCRIBE FORMATTED {full_name}").collect()
         desc_map = {row[0].strip(): (row[1] or "").strip() for row in desc_rows if row[0]}
+
+        # Only EXTERNAL tables are supported — MANAGED tables would be altered
+        # by the rename swap, risking Metastore inconsistency.
+        table_type = desc_map.get("Table Type", desc_map.get("Table Type:", "")).strip().upper()
+        if table_type and "EXTERNAL" not in table_type:
+            raise SkipTableError(
+                f"not an external table (Table Type: {table_type}). "
+                "Lakekeeper only supports EXTERNAL tables."
+            )
 
         location = self._extract_location(desc_map)
         file_format = self._detect_format(desc_map)

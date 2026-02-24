@@ -471,6 +471,60 @@ class TestMaybeSubmit:
         mock_run.assert_not_called()
 
 
+class TestConfigFileGroupLevel:
+    @patch("lakekeeper.cli._get_engine")
+    def test_config_file_before_subcommand(self, mock_get_engine, tmp_path):
+        """--config-file before the subcommand name must be accepted."""
+        from lakekeeper.models import FileFormat, TableInfo
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("block_size_mb: 256\n")
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.analyze.return_value = TableInfo(
+            database="mydb",
+            table_name="tbl",
+            location="hdfs:///data",
+            file_format=FileFormat.PARQUET,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["--config-file", str(config_file), "analyze", "--table", "mydb.tbl"])
+        assert result.exit_code == 0
+
+
+class TestSkipTableError:
+    @patch("lakekeeper.cli._get_engine")
+    def test_analyze_skips_non_external(self, mock_get_engine):
+        """A SkipTableError from the engine is caught and the table is skipped gracefully."""
+        from lakekeeper.models import SkipTableError
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.analyze.side_effect = SkipTableError("not an external table (Table Type: MANAGED_TABLE)")
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["analyze", "--table", "mydb.managed"])
+        assert result.exit_code == 0
+        assert "Skipping" in result.output
+
+    @patch("lakekeeper.cli._get_engine")
+    def test_compact_skips_non_external(self, mock_get_engine):
+        """compact also skips non-external tables without error."""
+        from lakekeeper.models import SkipTableError
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.analyze.side_effect = SkipTableError("not an external table (Table Type: MANAGED_TABLE)")
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["compact", "--table", "mydb.managed"])
+        assert result.exit_code == 0
+        assert "Skipping" in result.output
+        mock_engine.create_backup.assert_not_called()
+
+
 class TestResolveTablesErrors:
     @patch("lakekeeper.cli._get_engine")
     def test_invalid_table_format(self, mock_get_engine):

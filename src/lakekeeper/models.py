@@ -7,6 +7,10 @@ from datetime import datetime
 from enum import Enum
 
 
+class SkipTableError(Exception):
+    """Raised when a table must be skipped (e.g. not an external table)."""
+
+
 class FileFormat(Enum):
     """Supported file formats."""
 

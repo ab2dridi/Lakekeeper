@@ -45,6 +45,10 @@ spark_submit:
   script_path: /hdfs/path/to/run_lakekeeper.py
   extra_conf:
     spark.yarn.kerberos.relogin.period: 1h
+    spark.yarn.security.tokens.hive.enabled: "false"   # adjust to cluster policy
+  extra_files:
+    - /etc/hive/conf.cloudera.hive/hive-site.xml
+    - /etc/hive/conf.cloudera.hive/hdfs-site.xml
 ```
 
 > **Note — deploy_mode cluster:** In cluster mode the driver runs on a YARN

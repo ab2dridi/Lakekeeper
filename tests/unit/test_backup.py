@@ -190,3 +190,59 @@ class TestBackupManager:
             "PARTITION(year='2024', month='01') "
             "SET LOCATION 'hdfs:///data/mydb/logs/year=2024/month=01__old_1708001000'"
         )
+
+    def test_create_backup_original_purge_true_non_partitioned(self, backup_mgr, mock_spark, sample_table_info):
+        """When the original table has purge='true', the backup must still be set to purge='false'.
+
+        On CDP clusters, external.table.purge defaults to 'true'. SHOW CREATE TABLE
+        returns a DDL that contains TBLPROPERTIES ('external.table.purge'='true').
+        The backup DDL inherits this, but the subsequent ALTER TABLE must override it
+        so the backup table never deletes data when dropped.
+        """
+        sample_ddl = (
+            "CREATE EXTERNAL TABLE `mydb`.`events` (`id` INT) "
+            "STORED AS PARQUET "
+            "LOCATION 'hdfs:///data/mydb/events' "
+            "TBLPROPERTIES ('external.table.purge'='true')"
+        )
+        ddl_row = MagicMock(__getitem__=lambda self, i, ddl=sample_ddl: ddl)
+        mock_spark.sql.return_value.collect.return_value = [ddl_row]
+
+        backup_info = backup_mgr.create_backup(sample_table_info)
+
+        calls = [str(c) for c in mock_spark.sql.call_args_list]
+        # The backup DDL (derived from original) will contain purge='true' initially
+        create_calls = [c for c in calls if "__bkp_events_" in c and "SET TBLPROPERTIES" not in c]
+        assert len(create_calls) == 1
+        assert "purge'='true'" in create_calls[0] or "purge'='true" in create_calls[0] or "purge'='true'" in create_calls[0]
+        # The ALTER TABLE call MUST set it to 'false' — this is the safety guarantee
+        alter_tblprops = [c for c in calls if "SET TBLPROPERTIES" in c]
+        assert len(alter_tblprops) == 1
+        assert "external.table.purge" in alter_tblprops[0]
+        assert "'false'" in alter_tblprops[0]
+        # Backup table name is correct
+        assert backup_info.backup_table.startswith("mydb.__bkp_events_")
+
+    def test_create_backup_original_purge_true_partitioned(self, backup_mgr, mock_spark, sample_partitioned_table_info):
+        """Partitioned table with purge='true': backup must always have purge='false'."""
+        sample_ddl = (
+            "CREATE EXTERNAL TABLE `mydb`.`logs` (`id` INT) "
+            "PARTITIONED BY (`year` STRING, `month` STRING) "
+            "STORED AS ORC "
+            "LOCATION 'hdfs:///data/mydb/logs' "
+            "TBLPROPERTIES ('external.table.purge'='true')"
+        )
+        ddl_row = MagicMock(__getitem__=lambda self, i, ddl=sample_ddl: ddl)
+        mock_spark.sql.return_value.collect.return_value = [ddl_row]
+
+        backup_mgr.create_backup(sample_partitioned_table_info)
+
+        calls = [str(c) for c in mock_spark.sql.call_args_list]
+        alter_tblprops = [c for c in calls if "SET TBLPROPERTIES" in c]
+        assert len(alter_tblprops) == 1
+        assert "external.table.purge" in alter_tblprops[0]
+        assert "'false'" in alter_tblprops[0]
+        # Sanity: ALTER TABLE for purge=false comes AFTER the CREATE
+        create_idx = next(i for i, c in enumerate(calls) if "__bkp_logs_" in c and "SET TBLPROPERTIES" not in c)
+        alter_idx = next(i for i, c in enumerate(calls) if "SET TBLPROPERTIES" in c and "external.table.purge" in c)
+        assert alter_idx > create_idx, "ALTER TABLE purge='false' must come AFTER the CREATE"

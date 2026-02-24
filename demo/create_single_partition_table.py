@@ -183,7 +183,7 @@ def main() -> None:
         PARTITIONED BY (date STRING COMMENT 'Event date YYYY-MM-DD')
         STORED AS PARQUET
         LOCATION '{table_location}'
-        TBLPROPERTIES ('external.table.purge' = 'false')
+        TBLPROPERTIES ('external.table.purge' = 'true')
     """)
     logger.info("External table created: %s", full_table)
 

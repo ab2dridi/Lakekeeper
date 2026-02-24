@@ -83,11 +83,16 @@ class Compactor:
             before_avg_file_size=table_info.avg_file_size_bytes,
         )
 
+        # Single timestamp for the entire run: all __old_TS and __compact_tmp_TS
+        # directories from this compaction share the same suffix, making them
+        # identifiable as a group for cleanup and debugging.
+        run_ts = int(time.time())
+
         try:
             if table_info.is_partitioned:
-                self._compact_partitioned(table_info, format_str, report, backup_info)
+                self._compact_partitioned(table_info, format_str, report, backup_info, run_ts)
             else:
-                self._compact_non_partitioned(table_info, format_str, report, backup_info)
+                self._compact_non_partitioned(table_info, format_str, report, backup_info, run_ts)
 
             report.status = CompactionStatus.COMPLETED
             logger.info("Compaction completed for %s", full_name)
@@ -107,14 +112,14 @@ class Compactor:
         format_str: str,
         report: CompactionReport,
         backup_info: BackupInfo,
+        run_ts: int,
     ) -> None:
         """Compact a non-partitioned table using HDFS rename for atomic swap."""
         full_name = table_info.full_name
         location = table_info.location.rstrip("/")
         target_files = max(1, math.ceil(table_info.total_size_bytes / self._config.block_size_bytes))
-        ts = int(time.time())
-        temp_location = f"{location}__compact_tmp_{ts}"
-        old_location = f"{location}__old_{ts}"
+        temp_location = f"{location}__compact_tmp_{run_ts}"
+        old_location = f"{location}__old_{run_ts}"
 
         self._check_paths_available(temp_location, old_location)
 
@@ -167,6 +172,7 @@ class Compactor:
         format_str: str,
         report: CompactionReport,
         backup_info: BackupInfo,
+        run_ts: int,
     ) -> None:
         """Compact a partitioned table, partition by partition."""
         partitions_compacted = 0
@@ -181,7 +187,7 @@ class Compactor:
                 total_after_size += partition.total_size_bytes
                 continue
 
-            self._compact_single_partition(table_info, partition, format_str, backup_info)
+            self._compact_single_partition(table_info, partition, format_str, backup_info, run_ts)
             partitions_compacted += 1
 
             try:
@@ -205,14 +211,14 @@ class Compactor:
         partition: PartitionInfo,
         format_str: str,
         backup_info: BackupInfo,
+        run_ts: int,
     ) -> None:
         """Compact a single partition using HDFS rename for atomic swap."""
         full_name = table_info.full_name
         location = partition.location.rstrip("/")
         target_files = partition.target_files
-        ts = int(time.time())
-        temp_location = f"{location}__compact_tmp_{ts}"
-        old_location = f"{location}__old_{ts}"
+        temp_location = f"{location}__compact_tmp_{run_ts}"
+        old_location = f"{location}__old_{run_ts}"
 
         self._check_paths_available(temp_location, old_location)
 

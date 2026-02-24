@@ -13,6 +13,33 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class SparkSubmitConfig:
+    """Configuration for launching jobs via spark-submit."""
+
+    enabled: bool = False
+    master: str = "yarn"
+    deploy_mode: str = "client"
+    principal: str | None = None
+    keytab: str | None = None
+    queue: str | None = None
+    archives: str | None = None
+    python_env: str | None = None
+    executor_memory: str | None = None
+    num_executors: int | None = None
+    executor_cores: int | None = None
+    driver_memory: str | None = None
+    script_path: str = "run_beekeeper.py"
+    extra_conf: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SparkSubmitConfig:
+        """Create a SparkSubmitConfig from a dictionary, ignoring unknown keys."""
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered)
+
+
+@dataclass
 class BeekeeperConfig:
     """Beekeeper configuration with defaults, YAML override, and CLI override."""
 
@@ -25,6 +52,7 @@ class BeekeeperConfig:
     database: str | None = None
     table: str | None = None
     tables: list[str] = field(default_factory=list)
+    spark_submit: SparkSubmitConfig = field(default_factory=SparkSubmitConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> BeekeeperConfig:
@@ -53,8 +81,11 @@ class BeekeeperConfig:
     def _from_dict(cls, data: dict[str, Any]) -> BeekeeperConfig:
         """Create config from a dictionary, ignoring unknown keys."""
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        filtered = {k: v for k, v in data.items() if k in valid_fields}
-        return cls(**filtered)
+        filtered = {k: v for k, v in data.items() if k in valid_fields and k != "spark_submit"}
+        config = cls(**filtered)
+        if "spark_submit" in data and isinstance(data["spark_submit"], dict):
+            config.spark_submit = SparkSubmitConfig.from_dict(data["spark_submit"])
+        return config
 
     def merge_cli_overrides(self, **kwargs: Any) -> BeekeeperConfig:
         """Return a new config with CLI overrides applied (non-None values only).
@@ -67,7 +98,7 @@ class BeekeeperConfig:
         """
         current = {f.name: getattr(self, f.name) for f in self.__dataclass_fields__.values()}
         for key, value in kwargs.items():
-            if value is not None and key in current:
+            if value is not None and key in current and key != "spark_submit":
                 current[key] = value
         return BeekeeperConfig(**current)
 

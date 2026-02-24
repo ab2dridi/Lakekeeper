@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 
 import click
@@ -10,6 +12,8 @@ from beekeeper import __version__
 from beekeeper.config import BeekeeperConfig
 from beekeeper.core.reporter import print_analysis_report, print_compaction_report
 from beekeeper.models import CompactionStatus
+
+_SUBMITTED_ENV = "BEEKEEPER_SUBMITTED"
 
 
 def _build_config(ctx: click.Context) -> BeekeeperConfig:
@@ -23,6 +27,23 @@ def _build_config(ctx: click.Context) -> BeekeeperConfig:
         config = BeekeeperConfig()
 
     return config.merge_cli_overrides(**params)
+
+
+def _maybe_submit(config: BeekeeperConfig) -> None:
+    """Launch via spark-submit if configured and not already running inside a submission."""
+    if not config.spark_submit.enabled:
+        return
+    if os.environ.get(_SUBMITTED_ENV):
+        return
+    from beekeeper.utils.spark import build_spark_submit_command
+
+    beekeeper_args = sys.argv[1:]
+    cmd = build_spark_submit_command(config.spark_submit, beekeeper_args)
+    click.echo(f"Launching via spark-submit: {' '.join(cmd)}")
+    env = os.environ.copy()
+    env[_SUBMITTED_ENV] = "1"
+    result = subprocess.run(cmd, env=env)  # noqa: S603
+    sys.exit(result.returncode)
 
 
 def _get_engine(config: BeekeeperConfig):  # noqa: ANN202
@@ -88,6 +109,7 @@ def analyze(ctx: click.Context, **kwargs: str | None) -> None:
     config = _build_config(ctx)
     if kwargs.get("tables"):
         config = config.merge_cli_overrides(tables=kwargs["tables"].split(","))
+    _maybe_submit(config)
     config.setup_logging()
 
     engine = _get_engine(config)
@@ -114,6 +136,7 @@ def compact(ctx: click.Context, **kwargs: str | None) -> None:
     config = _build_config(ctx)
     if kwargs.get("tables"):
         config = config.merge_cli_overrides(tables=kwargs["tables"].split(","))
+    _maybe_submit(config)
     config.setup_logging()
 
     engine = _get_engine(config)
@@ -161,6 +184,7 @@ def compact(ctx: click.Context, **kwargs: str | None) -> None:
 def rollback(ctx: click.Context, **kwargs: str | None) -> None:
     """Rollback a table to its pre-compaction state."""
     config = _build_config(ctx)
+    _maybe_submit(config)
     config.setup_logging()
 
     table = config.table
@@ -186,6 +210,7 @@ def rollback(ctx: click.Context, **kwargs: str | None) -> None:
 def cleanup(ctx: click.Context, **kwargs: str | None) -> None:
     """Clean up backup tables and old compacted data."""
     config = _build_config(ctx)
+    _maybe_submit(config)
     config.setup_logging()
 
     older_than = kwargs.get("older_than")

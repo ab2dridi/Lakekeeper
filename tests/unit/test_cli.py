@@ -392,6 +392,85 @@ class TestCompactWithConfigFile:
         assert "DRY RUN" in result.output
 
 
+class TestMaybeSubmit:
+    @patch("beekeeper.cli._get_engine")
+    def test_no_submit_when_disabled(self, mock_get_engine, tmp_path):
+        """When spark_submit.enabled=False, behaves normally without calling spark-submit."""
+        from beekeeper.models import FileFormat, TableInfo
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.analyze.return_value = TableInfo(
+            database="mydb",
+            table_name="tbl",
+            location="hdfs:///data",
+            file_format=FileFormat.PARQUET,
+            total_file_count=5,
+            total_size_bytes=1024,
+        )
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("spark_submit:\n  enabled: false\n")
+
+        runner = CliRunner()
+        with patch("subprocess.run") as mock_run:
+            result = runner.invoke(main, ["analyze", "--table", "mydb.tbl", "--config-file", str(config_file)])
+        assert result.exit_code == 0
+        mock_run.assert_not_called()
+
+    @patch("beekeeper.cli._get_engine")
+    def test_submit_launches_spark_submit(self, mock_get_engine, tmp_path):
+        """When spark_submit.enabled=True and not already submitted, launches spark-submit."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "spark_submit:\n  enabled: true\n  master: yarn\n  queue: my-queue\n  script_path: /opt/run_beekeeper.py\n"
+        )
+        runner = CliRunner()
+        with patch("subprocess.run") as mock_run, patch("sys.exit") as mock_exit:
+            mock_run.return_value = MagicMock(returncode=0)
+            runner.invoke(
+                main,
+                ["compact", "--database", "mydb", "--config-file", str(config_file)],
+                env={"BEEKEEPER_SUBMITTED": ""},
+                catch_exceptions=False,
+            )
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "spark-submit" in cmd
+        assert "--master" in cmd
+        assert "yarn" in cmd
+        assert "spark.yarn.queue=my-queue" in cmd
+        assert "/opt/run_beekeeper.py" in cmd
+        mock_exit.assert_any_call(0)
+
+    @patch("beekeeper.cli._get_engine")
+    def test_no_submit_when_already_submitted(self, mock_get_engine, tmp_path):
+        """When BEEKEEPER_SUBMITTED=1 is set, does not re-launch spark-submit."""
+        from beekeeper.models import FileFormat, TableInfo
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.analyze.return_value = TableInfo(
+            database="mydb",
+            table_name="tbl",
+            location="hdfs:///data",
+            file_format=FileFormat.PARQUET,
+            total_file_count=5,
+            total_size_bytes=1024,
+        )
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("spark_submit:\n  enabled: true\n")
+
+        runner = CliRunner()
+        with patch("subprocess.run") as mock_run:
+            result = runner.invoke(
+                main,
+                ["analyze", "--table", "mydb.tbl", "--config-file", str(config_file)],
+                env={"BEEKEEPER_SUBMITTED": "1"},
+            )
+        assert result.exit_code == 0
+        mock_run.assert_not_called()
+
+
 class TestResolveTablesErrors:
     @patch("beekeeper.cli._get_engine")
     def test_invalid_table_format(self, mock_get_engine):

@@ -71,7 +71,9 @@ beekeeper cleanup --table mydb.mytable
 beekeeper cleanup --database mydb --older-than 7d
 ```
 
-### With spark-submit
+### With spark-submit (manual)
+
+Useful for one-off runs or when Beekeeper is not installed on the edge node.
 
 ```bash
 # 1. Create conda environment
@@ -84,10 +86,30 @@ conda-pack -o beekeeper_env.tar.gz
 spark-submit \
   --master yarn \
   --deploy-mode client \
+  --principal myuser@MY.REALM.COM \
+  --keytab /etc/security/keytabs/myuser.keytab \
+  --conf spark.yarn.queue=my-queue \
   --archives beekeeper_env.tar.gz#beekeeper_env \
   --conf spark.pyspark.python=./beekeeper_env/bin/python \
   run_beekeeper.py compact --database mydb --block-size 128
 ```
+
+### With the CLI on a Kerberized cluster (recommended)
+
+On a Kerberized Cloudera CDP cluster, configure `spark_submit` in your YAML file.
+The `beekeeper` CLI will automatically build and execute the `spark-submit` command.
+
+```bash
+beekeeper --config-file config.yaml compact --database mydb
+# → spark-submit --master yarn --deploy-mode client --principal ... run_beekeeper.py compact --database mydb
+```
+
+**How it works:**
+
+1. `beekeeper compact ...` reads the YAML config and detects `spark_submit.enabled: true`
+2. It builds the full `spark-submit` command and executes it as a subprocess
+3. `run_beekeeper.py` is called by spark-submit, which runs the same CLI code inside the cluster
+4. The env variable `BEEKEEPER_SUBMITTED=1` prevents an infinite loop
 
 ## Configuration
 
@@ -101,11 +123,40 @@ dry_run: false
 log_level: INFO
 ```
 
+### Full YAML with spark-submit (Kerberized cluster)
+
+```yaml
+block_size_mb: 128
+compaction_ratio_threshold: 10.0
+dry_run: false
+log_level: INFO
+
+spark_submit:
+  enabled: true
+  master: yarn
+  deploy_mode: client
+  principal: myuser@MY.REALM.COM
+  keytab: /etc/security/keytabs/myuser.keytab
+  queue: data-engineering
+  archives: /opt/beekeeper_env.tar.gz#beekeeper_env
+  python_env: ./beekeeper_env/bin/python
+  executor_memory: 4g
+  num_executors: 10
+  executor_cores: 2
+  driver_memory: 2g
+  script_path: /opt/beekeeper/run_beekeeper.py
+  extra_conf:
+    spark.yarn.kerberos.relogin.period: 1h
+    spark.dynamicAllocation.enabled: "false"
+```
+
 ```bash
 beekeeper compact --database mydb --config-file config.yaml
 ```
 
 ### Parameters
+
+#### Beekeeper parameters
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -114,6 +165,25 @@ beekeeper compact --database mydb --config-file config.yaml
 | `backup_prefix` | `__bkp` | Prefix for backup tables |
 | `dry_run` | False | Analyze without compacting |
 | `log_level` | INFO | Log level |
+
+#### spark_submit parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Enable spark-submit mode |
+| `master` | `yarn` | Spark master URL |
+| `deploy_mode` | `client` | `client` or `cluster` |
+| `principal` | — | Kerberos principal (e.g. `user@REALM.COM`) |
+| `keytab` | — | Path to the Kerberos keytab file |
+| `queue` | — | YARN queue (`spark.yarn.queue`) |
+| `archives` | — | `--archives` argument for the conda env |
+| `python_env` | — | Path to python inside the archive (`spark.pyspark.python`) |
+| `executor_memory` | — | `--executor-memory` (e.g. `4g`) |
+| `num_executors` | — | `--num-executors` |
+| `executor_cores` | — | `--executor-cores` |
+| `driver_memory` | — | `--driver-memory` |
+| `script_path` | `run_beekeeper.py` | Path to the entry-point script passed to spark-submit |
+| `extra_conf` | `{}` | Additional `--conf key=value` pairs |
 
 ## How it works
 

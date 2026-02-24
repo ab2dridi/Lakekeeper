@@ -1,134 +1,115 @@
 # Beekeeper
 
-Safe compaction tool for Hive external tables on Cloudera CDP.
+> Safe compaction of Hive external tables on on-premises Kerberized Hadoop clusters.
 
-## Problem
+[![PyPI version](https://img.shields.io/pypi/v/beekeeper.svg)](https://pypi.org/project/beekeeper/)
+[![Python](https://img.shields.io/pypi/pyversions/beekeeper.svg)](https://pypi.org/project/beekeeper/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-On Cloudera CDP 7.1.9, Hive external tables created via PySpark accumulate thousands of small files (e.g., 65,000 files for 3 GB). This degrades read performance, overloads the HDFS NameNode, and slows queries.
+---
+
+## The problem
+
+On Hadoop clusters using Hive external tables with PySpark, data pipelines
+accumulate thousands of small files over time (e.g. 65,000 files for 3 GB of
+data). This pattern degrades read performance, overloads the HDFS NameNode,
+and slows down all downstream queries.
+
+The root cause is that Spark writes one file per partition task by default,
+and incremental pipelines append rather than rewrite. Common tools like
+`INSERT OVERWRITE` or `saveAsTable` solve the small-file problem but destroy
+metadata cataloging properties (Apache Atlas lineage, table location in the
+Hive Metastore), making them unsuitable for production use on managed clusters.
+
+Beekeeper solves this **without touching the table's Metastore location**.
+
+---
 
 ## Solution
 
-Beekeeper compacts these tables **safely**:
-- No `saveAsTable` — preserves Atlas cataloging properties
-- Zero-copy backups — no data duplication
-- Automatic partition detection — only compacts partitions that need it
-- Dynamic target file count — based on data size and HDFS block size
-- Row count verification — automatic rollback on mismatch
+Beekeeper compacts Hive external tables safely:
+
+- **No `saveAsTable`** — the table's Metastore location never changes, preserving lineage and catalog properties (Apache Atlas and compatible systems)
+- **Zero-copy backups** — `CREATE EXTERNAL TABLE LIKE` pointing to the original location, no data duplication
+- **Per-partition compaction** — only compacts partitions that exceed the small-file threshold, untouched partitions are skipped
+- **Dynamic target file count** — computed from actual data size and configured HDFS block size
+- **Row count verification** — aborts and rolls back automatically if counts do not match after compaction
+
+---
+
+## Requirements
+
+- Python >= 3.9
+- Apache Spark (PySpark) accessible on the cluster
+- Hive Metastore with external table support
+- HDFS as the underlying storage
+
+Tested on Cloudera CDP 7.1.9. Compatible with any on-premises Hadoop distribution
+(Hortonworks HDP, Apache Ambari, vanilla Hadoop) that exposes a standard Hive
+Metastore and HDFS filesystem.
+
+---
 
 ## Installation
 
 ```bash
-pip install .
+pip install beekeeper
+```
 
-# With dev dependencies
+For development:
+
+```bash
+git clone https://github.com/ab2dridi/BeeKeeper.git
+cd BeeKeeper
 pip install ".[dev]"
 ```
 
-## Usage
+---
 
-### Analyze tables (dry-run)
+## End-to-end usage
+
+### Scenario 1 — Local cluster (no Kerberos)
+
+Suitable for development environments or clusters without Kerberos authentication.
 
 ```bash
-# Analyze all external tables in a database
+# 1. Install
+pip install beekeeper
+
+# 2. Analyze — see which tables need compaction (no writes, safe to run anytime)
 beekeeper analyze --database mydb
 
-# Analyze a specific table
-beekeeper analyze --table mydb.mytable
+# 3. Compact a specific table
+beekeeper compact --table mydb.events
+
+# 4. If something went wrong, rollback to the original state
+beekeeper rollback --table mydb.events
+
+# 5. Once you're confident, remove the backup to free up disk space
+beekeeper cleanup --table mydb.events
 ```
 
-### Compact tables
+### Scenario 2 — On-premises Kerberized cluster (YAML config)
+
+On a Kerberized cluster, configure `spark_submit` in a YAML file. The
+`beekeeper` CLI automatically builds and executes the `spark-submit` command —
+no need to write it manually.
+
+**Step 1 — Create the Python environment to ship to the cluster**
 
 ```bash
-# Compact all external tables in a database
-beekeeper compact --database mydb
-
-# Compact a specific table
-beekeeper compact --table mydb.mytable
-
-# Compact multiple tables
-beekeeper compact --tables mydb.t1,mydb.t2,mydb.t3
-
-# With custom parameters
-beekeeper compact --database mydb --block-size 256 --ratio-threshold 5
-
-# Dry-run (analyze only)
-beekeeper compact --database mydb --dry-run
-```
-
-### Rollback
-
-```bash
-beekeeper rollback --table mydb.mytable
-```
-
-### Cleanup backups
-
-```bash
-# Clean all backups for a table
-beekeeper cleanup --table mydb.mytable
-
-# Clean backups older than 7 days
-beekeeper cleanup --database mydb --older-than 7d
-```
-
-### With spark-submit (manual)
-
-Useful for one-off runs or when Beekeeper is not installed on the edge node.
-
-```bash
-# 1. Create conda environment
 conda create -n beekeeper_env python=3.9 -y
 conda activate beekeeper_env
-pip install ./beekeeper
+pip install beekeeper
 conda-pack -o beekeeper_env.tar.gz
-
-# 2. Submit
-spark-submit \
-  --master yarn \
-  --deploy-mode client \
-  --principal myuser@MY.REALM.COM \
-  --keytab /etc/security/keytabs/myuser.keytab \
-  --conf spark.yarn.queue=my-queue \
-  --archives beekeeper_env.tar.gz#beekeeper_env \
-  --conf spark.pyspark.python=./beekeeper_env/bin/python \
-  run_beekeeper.py compact --database mydb --block-size 128
 ```
 
-### With the CLI on a Kerberized cluster (recommended)
-
-On a Kerberized Cloudera CDP cluster, configure `spark_submit` in your YAML file.
-The `beekeeper` CLI will automatically build and execute the `spark-submit` command.
-
-```bash
-beekeeper --config-file config.yaml compact --database mydb
-# → spark-submit --master yarn --deploy-mode client --principal ... run_beekeeper.py compact --database mydb
-```
-
-**How it works:**
-
-1. `beekeeper compact ...` reads the YAML config and detects `spark_submit.enabled: true`
-2. It builds the full `spark-submit` command and executes it as a subprocess
-3. `run_beekeeper.py` is called by spark-submit, which runs the same CLI code inside the cluster
-4. The env variable `BEEKEEPER_SUBMITTED=1` prevents an infinite loop
-
-## Configuration
-
-### YAML config file
+**Step 2 — Write a config file**
 
 ```yaml
+# beekeeper.yaml
 block_size_mb: 128
 compaction_ratio_threshold: 10.0
-backup_prefix: "__bkp"
-dry_run: false
-log_level: INFO
-```
-
-### Full YAML with spark-submit (Kerberized cluster)
-
-```yaml
-block_size_mb: 128
-compaction_ratio_threshold: 10.0
-dry_run: false
 log_level: INFO
 
 spark_submit:
@@ -147,37 +128,135 @@ spark_submit:
   script_path: /opt/beekeeper/run_beekeeper.py
   extra_conf:
     spark.yarn.kerberos.relogin.period: 1h
-    spark.dynamicAllocation.enabled: "false"
 ```
+
+**Step 3 — Run**
 
 ```bash
-beekeeper compact --database mydb --config-file config.yaml
+# Analyze (dry-run, no writes)
+beekeeper --config-file beekeeper.yaml analyze --database mydb
+
+# Compact a single table
+beekeeper --config-file beekeeper.yaml compact --table mydb.events
+
+# Compact multiple tables
+beekeeper --config-file beekeeper.yaml compact --tables mydb.events,mydb.users
+
+# Compact an entire database
+beekeeper --config-file beekeeper.yaml compact --database mydb
+
+# Rollback if needed
+beekeeper --config-file beekeeper.yaml rollback --table mydb.events
+
+# Cleanup backups older than 7 days
+beekeeper --config-file beekeeper.yaml cleanup --database mydb --older-than 7d
 ```
 
-### Parameters
+Under the hood, Beekeeper builds and executes:
 
-#### Beekeeper parameters
+```
+spark-submit --master yarn --deploy-mode client \
+  --principal myuser@MY.REALM.COM \
+  --keytab /etc/security/keytabs/myuser.keytab \
+  --conf spark.yarn.queue=data-engineering \
+  --archives /opt/beekeeper_env.tar.gz#beekeeper_env \
+  --conf spark.pyspark.python=./beekeeper_env/bin/python \
+  --executor-memory 4g --num-executors 10 \
+  /opt/beekeeper/run_beekeeper.py compact --table mydb.events
+```
+
+### Scenario 3 — spark-submit manually
+
+For one-off runs or when Beekeeper is not installed on the edge node.
+
+```bash
+spark-submit \
+  --master yarn \
+  --deploy-mode client \
+  --principal myuser@MY.REALM.COM \
+  --keytab /etc/security/keytabs/myuser.keytab \
+  --conf spark.yarn.queue=my-queue \
+  --archives beekeeper_env.tar.gz#beekeeper_env \
+  --conf spark.pyspark.python=./beekeeper_env/bin/python \
+  run_beekeeper.py compact --database mydb --block-size 128
+```
+
+---
+
+## CLI reference
+
+```
+beekeeper [OPTIONS] COMMAND [ARGS]...
+
+Options:
+  --version  Show version and exit.
+  --help     Show help and exit.
+
+Commands:
+  analyze   Analyze tables and report compaction needs (dry-run, no writes).
+  compact   Compact Hive external tables.
+  rollback  Rollback a table to its pre-compaction state.
+  cleanup   Remove backup tables and reclaim HDFS space.
+```
+
+### analyze
+
+```bash
+beekeeper analyze --database mydb
+beekeeper analyze --table mydb.events
+beekeeper analyze --tables mydb.events,mydb.users
+beekeeper analyze --table mydb.events --block-size 256 --ratio-threshold 5
+```
+
+### compact
+
+```bash
+beekeeper compact --database mydb
+beekeeper compact --table mydb.events
+beekeeper compact --tables mydb.events,mydb.users
+beekeeper compact --database mydb --block-size 256 --ratio-threshold 5
+beekeeper compact --database mydb --dry-run   # analyze only, no writes
+```
+
+### rollback
+
+```bash
+beekeeper rollback --table mydb.events
+```
+
+### cleanup
+
+```bash
+beekeeper cleanup --table mydb.events              # remove all backups for a table
+beekeeper cleanup --database mydb --older-than 7d  # remove backups older than 7 days
+```
+
+---
+
+## Configuration reference
+
+### Beekeeper parameters
+
+| Parameter | Default | CLI flag | Description |
+|---|---|---|---|
+| `block_size_mb` | `128` | `--block-size` | Target HDFS block size in MB |
+| `compaction_ratio_threshold` | `10.0` | `--ratio-threshold` | Compact if avg file size < block_size / ratio |
+| `backup_prefix` | `__bkp` | — | Prefix for backup table names |
+| `dry_run` | `false` | `--dry-run` | Analyze only, no writes |
+| `log_level` | `INFO` | `--log-level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+
+### spark_submit parameters
 
 | Parameter | Default | Description |
 |---|---|---|
-| `block_size_mb` | 128 | Target HDFS block size in MB |
-| `compaction_ratio_threshold` | 10.0 | Compact if avg file < block_size / ratio |
-| `backup_prefix` | `__bkp` | Prefix for backup tables |
-| `dry_run` | False | Analyze without compacting |
-| `log_level` | INFO | Log level |
-
-#### spark_submit parameters
-
-| Parameter | Default | Description |
-|---|---|---|
-| `enabled` | `false` | Enable spark-submit mode |
+| `enabled` | `false` | Enable automatic spark-submit launch |
 | `master` | `yarn` | Spark master URL |
 | `deploy_mode` | `client` | `client` or `cluster` |
 | `principal` | — | Kerberos principal (e.g. `user@REALM.COM`) |
 | `keytab` | — | Path to the Kerberos keytab file |
-| `queue` | — | YARN queue (`spark.yarn.queue`) |
-| `archives` | — | `--archives` argument for the conda env |
-| `python_env` | — | Path to python inside the archive (`spark.pyspark.python`) |
+| `queue` | — | YARN queue name (`spark.yarn.queue`) |
+| `archives` | — | `--archives` for the conda-packed Python env |
+| `python_env` | — | Python path inside the archive (`spark.pyspark.python`) |
 | `executor_memory` | — | `--executor-memory` (e.g. `4g`) |
 | `num_executors` | — | `--num-executors` |
 | `executor_cores` | — | `--executor-cores` |
@@ -185,46 +264,49 @@ beekeeper compact --database mydb --config-file config.yaml
 | `script_path` | `run_beekeeper.py` | Path to the entry-point script passed to spark-submit |
 | `extra_conf` | `{}` | Additional `--conf key=value` pairs |
 
+---
+
 ## How it works
 
 ### Compaction strategy — HDFS rename swap
 
-Beekeeper uses HDFS directory renames rather than `ALTER TABLE SET LOCATION` to swap data. This means **the table's Metastore location never changes** — only the contents of the HDFS directory are replaced. Atlas lineage and cataloging properties are fully preserved.
+Beekeeper uses HDFS directory renames rather than `ALTER TABLE SET LOCATION`
+to swap data. The table's Metastore location never changes — only the contents
+of the HDFS directory are replaced in place. Lineage and cataloging properties
+(Apache Atlas and compatible systems) are fully preserved.
 
-#### Non-partitioned table — step by step
+#### Non-partitioned table
 
-Given a table `mydb.events` located at `hdfs:///warehouse/mydb/events/`:
+Given a table `mydb.events` at `hdfs:///warehouse/mydb/events/`:
 
 ```
 Step 1 — Backup
   Metastore: mydb.__bkp_events_20240301_020000  →  hdfs:///warehouse/mydb/events/
-             (TBLPROPERTIES external.table.purge=false)
+             (external.table.purge=false)
   HDFS:      events/   (original files, untouched)
 
 Step 2 — Write compacted data to a temp sibling directory
-  HDFS:      events/                       ← original, still live
+  HDFS:      events/                          ← original, still live
              events__compact_tmp_1709257200/  ← Spark writes here
 
 Step 3 — Verify row count
-  If counts differ: delete events__compact_tmp_1709257200/ and abort.
-  The original data at events/ is never touched.
+  Counts differ → delete events__compact_tmp_1709257200/ and abort.
+  Original data at events/ is never touched.
 
 Step 4 — Atomic HDFS rename swap
   rename  events/                        →  events__old_1709257200/
-  (update backup table Metastore         →  hdfs:///warehouse/mydb/events__old_1709257200/)
   rename  events__compact_tmp_1709257200/ →  events/
 
-Final HDFS state:
-  events/                     ← compacted data (table still points here, unchanged)
-  events__old_1709257200/     ← original data (kept for rollback)
-  __bkp_events_20240301_020000 table in Metastore
+Final state:
+  events/                       ← compacted files (table still points here)
+  events__old_1709257200/       ← original files (kept for rollback)
+  __bkp_events_20240301_020000  ← backup table in Metastore
 ```
-
-The table's location (`events/`) is now populated with compacted files. No ALTER TABLE was issued on the main table.
 
 #### Partitioned table
 
-The same swap is applied **partition by partition**, only for partitions that exceed the compaction threshold. Partitions that are already well-sized are skipped.
+The same rename swap is applied **partition by partition**, only for partitions
+that exceed the compaction threshold:
 
 ```
 Before:
@@ -237,7 +319,9 @@ After:
   events/year=2024/month=02/              ← untouched
 ```
 
-During compaction of a partitioned table, **readers of already-compacted partitions see the new compact files** while readers of not-yet-processed partitions still see the original files. All data remains consistent throughout.
+Readers of already-compacted partitions see the new files immediately while
+readers of not-yet-processed partitions still see the original data. All reads
+remain consistent throughout the operation.
 
 ### Rollback
 
@@ -245,14 +329,13 @@ During compaction of a partitioned table, **readers of already-compacted partiti
 beekeeper rollback --table mydb.events
 ```
 
-What happens:
 1. Finds the most recent backup table (`__bkp_events_*`)
-2. Reads the backup table's location — this is `events__old_TS/` (the original data)
-3. **Deletes** `events/` (the compacted data)
+2. Reads its Metastore location → `events__old_TS/` (the original data)
+3. Deletes `events/` (the compacted data)
 4. Renames `events__old_TS/` back to `events/`
 5. Drops the backup table
 
-After rollback the table is in exactly its pre-compaction state.
+The table is restored to exactly its pre-compaction state.
 
 ### Cleanup
 
@@ -260,9 +343,8 @@ After rollback the table is in exactly its pre-compaction state.
 beekeeper cleanup --table mydb.events
 ```
 
-What happens:
-1. Finds all `__bkp_events_*` tables
-2. For each backup: deletes the `__old_*` HDFS directory it points to, then drops the backup table
+1. Finds all `__bkp_events_*` backup tables
+2. For each: deletes the `__old_*` HDFS directory it points to, then drops the backup table
 
 **Cleanup is irreversible.** Once run, rollback is no longer possible for the cleaned backups.
 
@@ -270,48 +352,67 @@ What happens:
 
 ## Important considerations
 
-### ⚠ Concurrent writes — run during a maintenance window
+### ⚠ Run during a maintenance window
 
-Beekeeper reads the table twice (once to count rows, once to write). Any rows written by an active pipeline **between those two reads** will not appear in the compacted output and will be lost after the rename swap.
+Beekeeper reads the table twice (once to count rows, once to write). Any rows
+written by an active pipeline **between those two reads** will not appear in
+the compacted output and will be lost after the rename swap.
 
-**Always run Beekeeper while the source pipelines are stopped**, or schedule it in a maintenance window. Beekeeper will detect a row count mismatch if the gap is large enough to change the count, but a small write (fewer rows than rounding differences) may go undetected.
+**Always run Beekeeper while source pipelines are stopped**, or schedule it
+in a maintenance window.
 
-### ⚠ Disk quota — 2× space required
+### ⚠ 2× disk space required
 
-During compaction, both the original data and the compacted data exist on HDFS simultaneously:
+During compaction, both the original and compacted data exist on HDFS simultaneously:
 - `events/` — original files (until the rename swap)
 - `events__compact_tmp_TS/` — compacted files being written
 
-Make sure the HDFS parent directory quota allows **at least 2× the size of the table** before starting.
+Ensure the HDFS parent directory quota allows **at least 2× the table size** before starting.
 
 ### ⚠ Do not delete `__old_*` directories manually
 
-After a successful compaction, `events__old_TS/` holds the original data and is the safety net for rollback. Deleting it manually makes rollback impossible. Use `beekeeper cleanup` to remove it once you are confident the compaction is correct.
+After a successful compaction, `events__old_TS/` is the rollback safety net.
+Deleting it manually makes rollback impossible. Use `beekeeper cleanup` instead.
 
 ### ⚠ Do not drop backup tables manually
 
-Backup tables are created with `TBLPROPERTIES ('external.table.purge'='false')` specifically to prevent a Cloudera CDP cluster-wide setting (`external.table.purge=true`) from deleting their underlying HDFS data on `DROP TABLE`. Dropping a backup table manually via Hive/Beeline is safe because of this setting, but doing so removes the Metastore pointer to `events__old_TS/`, preventing Beekeeper from performing a rollback.
+Backup tables are created with `TBLPROPERTIES ('external.table.purge'='false')`
+to prevent the Hive Metastore setting `external.table.purge=true` from deleting
+the underlying HDFS data on `DROP TABLE`. Dropping a backup table manually
+removes the Metastore pointer to `events__old_TS/` and prevents rollback.
+
+> **Cloudera CDP note:** CDP clusters commonly set `external.table.purge=true`
+> globally. The `purge=false` property on backup tables overrides this default.
 
 ### ⚠ Leftover staging directories block the next run
 
-If a previous compaction crashed between steps, it may have left a `events__compact_tmp_TS/` or `events__old_TS/` directory behind. Beekeeper **refuses to start** if either staging path already exists (to avoid silently overwriting data). You must resolve the situation manually before retrying:
+If a previous compaction crashed, it may have left a `events__compact_tmp_TS/`
+or `events__old_TS/` directory behind. Beekeeper **refuses to start** if either
+path already exists. Resolve manually before retrying:
 
-1. Inspect what is in the leftover directory.
-2. If it contains good compacted data, check whether the rename swap completed and restore accordingly.
-3. If it is stale/incomplete, delete it with `hdfs dfs -rm -r <path>`.
+1. Inspect the leftover directory contents.
+2. If it contains valid compacted data, check whether the rename swap completed and restore accordingly.
+3. If it is stale or incomplete, delete it: `hdfs dfs -rm -r <path>`.
 
 ---
 
 ## Development
 
 ```bash
-# Install dev dependencies
+git clone https://github.com/ab2dridi/BeeKeeper.git
+cd BeeKeeper
 pip install ".[dev]"
 
 # Lint
 ruff check src/ tests/
 ruff format --check src/ tests/
 
-# Test with coverage
+# Tests with coverage
 pytest tests/ -v --cov=beekeeper --cov-report=term-missing
 ```
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.

@@ -4,12 +4,32 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "beekeeper"
-version = "0.1.0"
-description = "Safe compaction tool for Hive external tables on Cloudera CDP"
+version = "0.0.1"
+description = "Safe compaction of Hive external tables on on-premises Kerberized Hadoop clusters"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
-authors = [{name = "Data Engineering Team"}]
+authors = [
+    {name = "ab2dridi", email = "a-d13@hotmail.fr"},
+]
+keywords = [
+    "hive", "hdfs", "spark", "compaction", "hadoop", "kerberos",
+    "pyspark", "data-engineering", "small-files",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: System :: Filesystems",
+    "Topic :: Utilities",
+]
 dependencies = [
     "click>=8.0",
     "pyyaml>=6.0",
@@ -21,6 +41,12 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ab2dridi/BeeKeeper"
+Repository = "https://github.com/ab2dridi/BeeKeeper"
+Changelog = "https://github.com/ab2dridi/BeeKeeper/blob/main/CHANGELOG.md"
+"Bug Tracker" = "https://github.com/ab2dridi/BeeKeeper/issues"
 
 [project.scripts]
 beekeeper = "beekeeper.cli:main"

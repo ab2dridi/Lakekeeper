@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -18,6 +18,7 @@ class HdfsFileInfo:
 
     file_count: int
     total_size_bytes: int
+    file_sizes: list[int] = field(default_factory=list)
 
     @property
     def avg_file_size_bytes(self) -> int:
@@ -25,6 +26,27 @@ class HdfsFileInfo:
         if self.file_count == 0:
             return 0
         return self.total_size_bytes // self.file_count
+
+    @property
+    def median_file_size_bytes(self) -> int:
+        """Median file size in bytes. Falls back to avg when no sizes collected."""
+        if not self.file_sizes:
+            return self.avg_file_size_bytes
+        sorted_sizes = sorted(self.file_sizes)
+        n = len(sorted_sizes)
+        mid = n // 2
+        if n % 2 == 1:
+            return sorted_sizes[mid]
+        return (sorted_sizes[mid - 1] + sorted_sizes[mid]) // 2
+
+    @property
+    def effective_file_size_bytes(self) -> int:
+        """Min of avg and median file size.
+
+        Catches skewed distributions where a few large files inflate the
+        average while many tiny files remain undetected.
+        """
+        return min(self.avg_file_size_bytes, self.median_file_size_bytes)
 
 
 class HdfsClient:
@@ -67,6 +89,7 @@ class HdfsClient:
 
         file_count = 0
         total_size = 0
+        file_sizes: list[int] = []
 
         iterator = fs.listFiles(hadoop_path, True)
         while iterator.hasNext():
@@ -77,10 +100,12 @@ class HdfsClient:
                 # getLen() returns the logical file size (data bytes only).
                 # It does NOT include the HDFS replication factor.
                 # A 50 MB file with replication=3 reports 50 MB here, not 150 MB.
-                total_size += file_status.getLen()
+                size = file_status.getLen()
+                total_size += size
+                file_sizes.append(size)
 
         logger.debug("HDFS path %s: %d files, %d bytes", path, file_count, total_size)
-        return HdfsFileInfo(file_count=file_count, total_size_bytes=total_size)
+        return HdfsFileInfo(file_count=file_count, total_size_bytes=total_size, file_sizes=file_sizes)
 
     def path_exists(self, path: str) -> bool:
         """Check if an HDFS path exists.

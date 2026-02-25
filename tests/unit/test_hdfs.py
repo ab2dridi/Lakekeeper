@@ -18,6 +18,35 @@ class TestHdfsFileInfo:
         info = HdfsFileInfo(file_count=0, total_size_bytes=0)
         assert info.avg_file_size_bytes == 0
 
+    def test_median_odd_count(self):
+        info = HdfsFileInfo(file_count=3, total_size_bytes=300, file_sizes=[100, 200, 300])
+        assert info.median_file_size_bytes == 200
+
+    def test_median_even_count(self):
+        info = HdfsFileInfo(file_count=4, total_size_bytes=400, file_sizes=[100, 200, 300, 400])
+        assert info.median_file_size_bytes == (200 + 300) // 2
+
+    def test_median_fallback_to_avg_when_no_sizes(self):
+        info = HdfsFileInfo(file_count=4, total_size_bytes=400)
+        assert info.median_file_size_bytes == info.avg_file_size_bytes
+
+    def test_effective_size_picks_min_of_avg_and_median(self):
+        # 2 large files (2 GB each) + 98 tiny files (100 bytes each)
+        large = 2 * 1024 * 1024 * 1024
+        tiny = 100
+        sizes = [large, large] + [tiny] * 98
+        total = sum(sizes)
+        info = HdfsFileInfo(file_count=100, total_size_bytes=total, file_sizes=sizes)
+        # avg is pulled up by the large files; median is tiny
+        assert info.avg_file_size_bytes > 40 * 1024 * 1024  # avg > 40 MB
+        assert info.median_file_size_bytes == tiny  # median = 100 bytes
+        assert info.effective_file_size_bytes == tiny  # min picks median
+
+    def test_effective_size_equals_avg_when_uniform(self):
+        sizes = [1000] * 10
+        info = HdfsFileInfo(file_count=10, total_size_bytes=10000, file_sizes=sizes)
+        assert info.effective_file_size_bytes == info.avg_file_size_bytes
+
 
 class TestHdfsClient:
     @pytest.fixture
@@ -56,6 +85,7 @@ class TestHdfsClient:
         result = hdfs_client.get_file_info("hdfs:///data/test")
         assert result.file_count == 2  # hidden file excluded
         assert result.total_size_bytes == 3000
+        assert result.file_sizes == [1000, 2000]
 
     def test_get_file_info_skips_dot_files(self, hdfs_client, mock_spark):
         dot_file = MagicMock()

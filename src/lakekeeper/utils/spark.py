@@ -23,7 +23,7 @@ def build_spark_submit_command(spark_cfg: SparkSubmitConfig, lakekeeper_args: li
     Returns:
         Full command list suitable for subprocess.run().
     """
-    cmd = ["spark-submit", "--master", spark_cfg.master, "--deploy-mode", spark_cfg.deploy_mode]
+    cmd = [spark_cfg.submit_command, "--master", spark_cfg.master, "--deploy-mode", spark_cfg.deploy_mode]
 
     if spark_cfg.principal:
         cmd += ["--principal", spark_cfg.principal]
@@ -47,6 +47,8 @@ def build_spark_submit_command(spark_cfg: SparkSubmitConfig, lakekeeper_args: li
         cmd += ["--conf", f"{key}={value}"]
     if spark_cfg.extra_files:
         cmd += ["--files", ",".join(spark_cfg.extra_files)]
+    if spark_cfg.py_files:
+        cmd += ["--py-files", ",".join(spark_cfg.py_files)]
 
     cmd.append(spark_cfg.script_path)
     cmd += lakekeeper_args

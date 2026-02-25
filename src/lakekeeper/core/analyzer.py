@@ -63,13 +63,26 @@ class TableAnalyzer:
         table_type = desc_map.get("Table Type", desc_map.get("Table Type:", "")).strip().upper()
         if table_type and "EXTERNAL" not in table_type:
             raise SkipTableError(
-                f"not an external table (Table Type: {table_type}). "
-                "Lakekeeper only supports EXTERNAL tables."
+                f"not an external table (Table Type: {table_type}). Lakekeeper only supports EXTERNAL tables."
+            )
+
+        # Iceberg tables are EXTERNAL in the Metastore but use a completely different
+        # storage layout (metadata JSON + manifest files).  The HDFS rename-swap used
+        # by Lakekeeper would corrupt the Iceberg snapshot chain.  Detect via
+        # InputFormat / SerDe Library and skip them explicitly.
+        input_format = desc_map.get("InputFormat", desc_map.get("InputFormat:", "")).lower()
+        serde = desc_map.get("SerDe Library", desc_map.get("SerDe Library:", "")).lower()
+        if "iceberg" in input_format or "iceberg" in serde:
+            raise SkipTableError(
+                "Iceberg table detected. Lakekeeper only supports Hive-native EXTERNAL "
+                "tables (Parquet/ORC). Use Iceberg's built-in compaction instead."
             )
 
         location = self._extract_location(desc_map)
         file_format = self._detect_format(desc_map)
         partition_columns = self._detect_partition_columns(desc_rows)
+        compression_codec = self._detect_compression(desc_map, file_format)
+        sort_columns = self._resolve_sort_columns(full_name, desc_map)
 
         table_info = TableInfo(
             database=database,
@@ -78,6 +91,8 @@ class TableAnalyzer:
             file_format=file_format,
             is_partitioned=len(partition_columns) > 0,
             partition_columns=partition_columns,
+            compression_codec=compression_codec,
+            sort_columns=sort_columns,
         )
 
         if table_info.is_partitioned:
@@ -116,11 +131,12 @@ class TableAnalyzer:
 
         self._determine_compaction_need(table_info)
         logger.info(
-            "Table %s: %d files, %d bytes, avg %d bytes, needs_compaction=%s",
+            "Table %s: %d files, %d bytes, avg %d bytes, median %s bytes, needs_compaction=%s",
             full_name,
             table_info.total_file_count,
             table_info.total_size_bytes,
             table_info.avg_file_size_bytes,
+            table_info.median_file_size_bytes,
             table_info.needs_compaction,
         )
         return table_info
@@ -192,6 +208,7 @@ class TableAnalyzer:
         file_info = self._hdfs.get_file_info(table_info.location)
         table_info.total_file_count = file_info.file_count
         table_info.total_size_bytes = file_info.total_size_bytes
+        table_info.median_file_size_bytes = file_info.median_file_size_bytes
 
     def _analyze_partitions(self, table_info: TableInfo, partition_rows: list | None = None) -> None:
         """Analyze all partitions of a partitioned table.
@@ -235,7 +252,7 @@ class TableAnalyzer:
 
             # A single-file partition cannot be reduced further regardless of size:
             # coalesce(1 → 1) would be a no-op rename-swap with no benefit.
-            has_small_files = file_info.avg_file_size_bytes < self._config.compaction_threshold_bytes
+            has_small_files = file_info.effective_file_size_bytes < self._config.compaction_threshold_bytes
             needs_compaction = has_small_files and file_info.file_count > 1
 
             partition_info = PartitionInfo(
@@ -286,9 +303,73 @@ class TableAnalyzer:
                 result[match.group(1)] = match.group(2)
         return result
 
+    def _detect_compression(self, desc_map: dict[str, str], file_format: FileFormat) -> str | None:
+        """Detect compression codec from DESCRIBE FORMATTED table properties.
+
+        Hive stores the codec in TBLPROPERTIES:
+          - Parquet: ``parquet.compression`` (SNAPPY, GZIP, ZSTD, LZ4, UNCOMPRESSED)
+          - ORC:     ``orc.compress``        (SNAPPY, ZLIB, LZ4, ZSTD, NONE)
+
+        Returns the codec in lowercase (Spark's expected format), or None if the
+        property is absent (Spark will then use its session-level default).
+        """
+        if file_format == FileFormat.PARQUET:
+            raw = desc_map.get("parquet.compression", desc_map.get("parquet.compression:", ""))
+        else:
+            raw = desc_map.get("orc.compress", desc_map.get("orc.compress:", ""))
+
+        codec = raw.strip().lower() if raw.strip() else None
+        if codec:
+            logger.debug("Detected compression codec from table properties: %s", codec)
+        return codec
+
+    def _resolve_sort_columns(self, full_name: str, desc_map: dict[str, str]) -> list[str]:
+        """Resolve sort columns with priority: config (CLI/YAML) > DDL SORTED BY > none.
+
+        Args:
+            full_name: Fully qualified table name (db.table).
+            desc_map: DESCRIBE FORMATTED key/value pairs.
+
+        Returns:
+            List of column names to sort by before coalescing, or empty list.
+        """
+        # Highest priority: explicit config (CLI --sort-columns injects here, overriding YAML)
+        configured = self._config.sort_columns.get(full_name)
+        if configured:
+            logger.debug("Using configured sort columns for %s: %s", full_name, configured)
+            return list(configured)
+
+        # Fallback: DDL SORTED BY from DESCRIBE FORMATTED
+        ddl_cols = self._detect_sort_columns_from_ddl(desc_map)
+        if ddl_cols:
+            logger.debug("Using DDL sort columns for %s: %s", full_name, ddl_cols)
+        return ddl_cols
+
+    @staticmethod
+    def _detect_sort_columns_from_ddl(desc_map: dict[str, str]) -> list[str]:
+        """Detect sort columns from the 'Sort Columns' field in DESCRIBE FORMATTED.
+
+        Hive stores CLUSTERED BY … SORTED BY … DDL metadata as:
+            Sort Columns:    [{col:event_time, order:1}, {col:user_id, order:1}]
+        where order=1 is ASC and order=0 is DESC.
+
+        Returns column names in DDL order, or an empty list if absent.
+        """
+        raw = desc_map.get("Sort Columns", desc_map.get("Sort Columns:", "")).strip()
+        if not raw or raw in ("[]", ""):
+            return []
+        # Extract (col_name, order) pairs: "{col:event_time, order:1}"
+        pairs = re.findall(r"\{col:(\w+),\s*order:(\d+)\}", raw)
+        return [col for col, _order in pairs]
+
     def _determine_compaction_need(self, table_info: TableInfo) -> None:
         """Determine if a table needs compaction."""
         if table_info.is_partitioned:
             table_info.needs_compaction = any(p.needs_compaction for p in table_info.partitions)
         else:
-            table_info.needs_compaction = table_info.avg_file_size_bytes < self._config.compaction_threshold_bytes
+            effective_size = (
+                min(table_info.avg_file_size_bytes, table_info.median_file_size_bytes)
+                if table_info.median_file_size_bytes is not None
+                else table_info.avg_file_size_bytes
+            )
+            table_info.needs_compaction = effective_size < self._config.compaction_threshold_bytes

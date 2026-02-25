@@ -17,6 +17,7 @@ class SparkSubmitConfig:
     """Configuration for launching jobs via spark-submit."""
 
     enabled: bool = False
+    submit_command: str = "spark-submit"
     master: str = "yarn"
     deploy_mode: str = "client"
     principal: str | None = None
@@ -31,6 +32,7 @@ class SparkSubmitConfig:
     script_path: str = "run_lakekeeper.py"
     extra_conf: dict[str, str] = field(default_factory=dict)
     extra_files: list[str] = field(default_factory=list)
+    py_files: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SparkSubmitConfig:
@@ -54,6 +56,8 @@ class LakekeeperConfig:
     table: str | None = None
     tables: list[str] = field(default_factory=list)
     spark_submit: SparkSubmitConfig = field(default_factory=SparkSubmitConfig)
+    sort_columns: dict[str, list[str]] = field(default_factory=dict)
+    analyze_after_compaction: bool = False
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> LakekeeperConfig:

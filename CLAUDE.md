@@ -111,7 +111,7 @@ python -m build
 python -m twine upload dist/lakekeeper-<version>*
 ```
 
-Current published version: 0.0.5.
+Current published version: 0.0.6.
 
 ## Files of note
 

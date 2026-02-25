@@ -18,9 +18,7 @@ class TestBackupManager:
     def test_create_backup_non_partitioned(self, backup_mgr, mock_spark, sample_table_info):
         # Mock SHOW CREATE TABLE response (SparkSQL returns backtick-quoted identifiers)
         sample_ddl = (
-            "CREATE EXTERNAL TABLE `mydb`.`events` (`id` INT) "
-            "STORED AS PARQUET "
-            "LOCATION 'hdfs:///data/mydb/events'"
+            "CREATE EXTERNAL TABLE `mydb`.`events` (`id` INT) STORED AS PARQUET LOCATION 'hdfs:///data/mydb/events'"
         )
         ddl_row = MagicMock(__getitem__=lambda self, i, ddl=sample_ddl: ddl)
         mock_spark.sql.return_value.collect.return_value = [ddl_row]
@@ -223,10 +221,7 @@ class TestBackupManager:
         assert "__bkp_events_" in alter_tblprops[0], "SET TBLPROPERTIES must target the backup table, not the original"
 
         # CRITICAL: the original table MUST NEVER be subject to SET TBLPROPERTIES
-        original_modified = [
-            c for c in calls
-            if "SET TBLPROPERTIES" in c and original_table in c and "__bkp_" not in c
-        ]
+        original_modified = [c for c in calls if "SET TBLPROPERTIES" in c and original_table in c and "__bkp_" not in c]
         assert original_modified == [], (
             f"Original table '{original_table}' must never have its TBLPROPERTIES modified: {original_modified}"
         )
@@ -260,10 +255,7 @@ class TestBackupManager:
         assert "__bkp_logs_" in alter_tblprops[0], "SET TBLPROPERTIES must target the backup table, not the original"
 
         # CRITICAL: the original table MUST NEVER be subject to SET TBLPROPERTIES
-        original_modified = [
-            c for c in calls
-            if "SET TBLPROPERTIES" in c and original_table in c and "__bkp_" not in c
-        ]
+        original_modified = [c for c in calls if "SET TBLPROPERTIES" in c and original_table in c and "__bkp_" not in c]
         assert original_modified == [], (
             f"Original table '{original_table}' must never have its TBLPROPERTIES modified: {original_modified}"
         )
@@ -295,11 +287,7 @@ class TestBackupManager:
             backup_mgr.create_backup(sample_table_info)
 
             calls = [str(c) for c in mock_spark.sql.call_args_list]
-            violating = [
-                c for c in calls
-                if "SET TBLPROPERTIES" in c and original_table in c and "__bkp_" not in c
-            ]
+            violating = [c for c in calls if "SET TBLPROPERTIES" in c and original_table in c and "__bkp_" not in c]
             assert violating == [], (
-                f"With purge={purge_value}: original table TBLPROPERTIES must never be modified, "
-                f"but found: {violating}"
+                f"With purge={purge_value}: original table TBLPROPERTIES must never be modified, but found: {violating}"
             )

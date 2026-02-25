@@ -23,23 +23,25 @@ from pathlib import Path
 # PySpark 3.3.x uses Hadoop 3.3 which calls javax.security.auth.Subject.getSubject(),
 # a method removed in Java 21+.  Set JAVA_TOOL_OPTIONS before the JVM boots so the
 # gateway process starts with the required --add-opens flags.
-_JAVA_OPENS = " ".join([
-    "--add-opens=java.base/java.lang=ALL-UNNAMED",
-    "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED",
-    "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
-    "--add-opens=java.base/java.io=ALL-UNNAMED",
-    "--add-opens=java.base/java.net=ALL-UNNAMED",
-    "--add-opens=java.base/java.nio=ALL-UNNAMED",
-    "--add-opens=java.base/java.util=ALL-UNNAMED",
-    "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED",
-    "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
-    "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
-    "--add-opens=java.base/sun.nio.cs=ALL-UNNAMED",
-    "--add-opens=java.base/sun.security.action=ALL-UNNAMED",
-    "--add-opens=java.base/sun.util.calendar=ALL-UNNAMED",
-    "--add-opens=java.base/javax.security.auth=ALL-UNNAMED",
-    "--add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED",
-])
+_JAVA_OPENS = " ".join(
+    [
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+        "--add-opens=java.base/java.io=ALL-UNNAMED",
+        "--add-opens=java.base/java.net=ALL-UNNAMED",
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+        "--add-opens=java.base/java.util=ALL-UNNAMED",
+        "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED",
+        "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
+        "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
+        "--add-opens=java.base/sun.nio.cs=ALL-UNNAMED",
+        "--add-opens=java.base/sun.security.action=ALL-UNNAMED",
+        "--add-opens=java.base/sun.util.calendar=ALL-UNNAMED",
+        "--add-opens=java.base/javax.security.auth=ALL-UNNAMED",
+        "--add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED",
+    ]
+)
 os.environ["JAVA_TOOL_OPTIONS"] = _JAVA_OPENS
 
 from pyspark.sql import SparkSession  # noqa: E402
@@ -52,15 +54,14 @@ from lakekeeper.models import CompactionStatus  # noqa: E402
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-BLOCK_MB = 1          # 1 MB blocks → forces compaction even on tiny test data
-RATIO    = 2.0        # compact if avg file < block/2
+BLOCK_MB = 1  # 1 MB blocks → forces compaction even on tiny test data
+RATIO = 2.0  # compact if avg file < block/2
 
 
 def make_spark(warehouse: str, metastore: str) -> SparkSession:
     """Create a local SparkSession with embedded Derby Hive Metastore."""
     return (
-        SparkSession.builder
-        .master("local[2]")
+        SparkSession.builder.master("local[2]")
         .appName("lakekeeper-integration-test")
         .config("spark.sql.warehouse.dir", warehouse)
         .config(
@@ -110,12 +111,13 @@ def _sep(char: str = "─", width: int = 60) -> str:
 
 # ── Scenario 1: non-partitioned table ────────────────────────────────────────
 
+
 def test_nonpartitioned(spark: SparkSession, warehouse: str) -> None:
     """Compact a non-partitioned table: analyze → compact → verify → cleanup."""
-    db    = "inttest_np"
+    db = "inttest_np"
     table = "events_flat"
-    full  = f"{db}.{table}"
-    loc   = f"{warehouse}/{db}.db/{table}"
+    full = f"{db}.{table}"
+    loc = f"{warehouse}/{db}.db/{table}"
 
     setup_db(spark, db)
     spark.sql(f"DROP TABLE IF EXISTS `{db}`.`{table}`")
@@ -164,12 +166,13 @@ def test_nonpartitioned(spark: SparkSession, warehouse: str) -> None:
 
 # ── Scenario 2: single-partition table (date) ─────────────────────────────────
 
+
 def test_single_partition(spark: SparkSession, warehouse: str) -> None:
     """Compact a table partitioned by date."""
-    db    = "inttest_sp"
+    db = "inttest_sp"
     table = "events"
-    full  = f"{db}.{table}"
-    loc   = f"{warehouse}/{db}.db/{table}"
+    full = f"{db}.{table}"
+    loc = f"{warehouse}/{db}.db/{table}"
 
     setup_db(spark, db)
     spark.sql(f"DROP TABLE IF EXISTS `{db}`.`{table}`")
@@ -219,12 +222,13 @@ def test_single_partition(spark: SparkSession, warehouse: str) -> None:
 
 # ── Scenario 3: two-partition table (date + ref) ─────────────────────────────
 
+
 def test_two_partitions(spark: SparkSession, warehouse: str) -> None:
     """Compact a table partitioned by (date, ref)."""
-    db    = "inttest_2p"
+    db = "inttest_2p"
     table = "events_2p"
-    full  = f"{db}.{table}"
-    loc   = f"{warehouse}/{db}.db/{table}"
+    full = f"{db}.{table}"
+    loc = f"{warehouse}/{db}.db/{table}"
 
     setup_db(spark, db)
     spark.sql(f"DROP TABLE IF EXISTS `{db}`.`{table}`")
@@ -241,8 +245,10 @@ def test_two_partitions(spark: SparkSession, warehouse: str) -> None:
     """)
 
     combos = [
-        ("2024-01-01", "A"), ("2024-01-01", "B"),
-        ("2024-01-02", "A"), ("2024-01-02", "B"),
+        ("2024-01-01", "A"),
+        ("2024-01-01", "B"),
+        ("2024-01-02", "A"),
+        ("2024-01-02", "B"),
     ]
     for d, r in combos:
         write_small_files(spark, f"{loc}/date={d}/ref={r}", n_rows=500, n_files=15)
@@ -277,12 +283,13 @@ def test_two_partitions(spark: SparkSession, warehouse: str) -> None:
 
 # ── Scenario 4: rollback ──────────────────────────────────────────────────────
 
+
 def test_rollback(spark: SparkSession, warehouse: str) -> None:
     """Compact then rollback: table must be restored to exact pre-compaction state."""
-    db    = "inttest_rb"
+    db = "inttest_rb"
     table = "events_rb"
-    full  = f"{db}.{table}"
-    loc   = f"{warehouse}/{db}.db/{table}"
+    full = f"{db}.{table}"
+    loc = f"{warehouse}/{db}.db/{table}"
 
     setup_db(spark, db)
     spark.sql(f"DROP TABLE IF EXISTS `{db}`.`{table}`")
@@ -320,10 +327,10 @@ def test_rollback(spark: SparkSession, warehouse: str) -> None:
 # ── runner ────────────────────────────────────────────────────────────────────
 
 SCENARIOS = [
-    ("Scenario 1 — Non-partitioned table",  test_nonpartitioned),
+    ("Scenario 1 — Non-partitioned table", test_nonpartitioned),
     ("Scenario 2 — Single-partition (date)", test_single_partition),
     ("Scenario 3 — Two partitions (date+ref)", test_two_partitions),
-    ("Scenario 4 — Rollback",               test_rollback),
+    ("Scenario 4 — Rollback", test_rollback),
 ]
 
 
@@ -334,11 +341,11 @@ def main() -> None:
     metastore = f"{tmpdir}/metastore_db"
     Path(warehouse).mkdir()
 
-    print(f"\n{'═'*60}")
+    print(f"\n{'═' * 60}")
     print("  LAKEKEEPER — Local Integration Tests")
     print("  PySpark 3.3.2 · Python 3.9 · Derby Hive Metastore")
     print(f"  Warehouse: {warehouse}")
-    print(f"{'═'*60}\n")
+    print(f"{'═' * 60}\n")
 
     spark = make_spark(warehouse, metastore)
     spark.sparkContext.setLogLevel("ERROR")
@@ -361,15 +368,15 @@ def main() -> None:
     spark.stop()
     shutil.rmtree(tmpdir, ignore_errors=True)
 
-    print(f"\n{'═'*60}")
+    print(f"\n{'═' * 60}")
     print("  SUMMARY")
-    print('═'*60)
+    print("═" * 60)
     all_pass = True
     for name, status in results:
         print(f"  {status}  {name}")
         if "FAIL" in status:
             all_pass = False
-    print(f"{'═'*60}\n")
+    print(f"{'═' * 60}\n")
 
     if not all_pass:
         raise SystemExit(1)

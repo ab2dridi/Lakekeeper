@@ -34,7 +34,7 @@ class TestCLIGroup:
         runner = CliRunner()
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
-        assert "0.0.5" in result.output
+        assert "0.0.6" in result.output
 
     def test_help(self):
         runner = CliRunner()
@@ -609,3 +609,103 @@ class TestExtractConfigFileForCluster:
         result_args, extra_files = _extract_config_file_for_cluster(args, "cluster")
         assert result_args == ["analyze", "--config-file", "lakekeeper.yaml", "--table", "db.tbl"]
         assert extra_files == [str(cfg)]
+
+
+class TestAnalyzeStatsFlag:
+    """Tests for --analyze-stats / --no-analyze-stats CLI flags on compact."""
+
+    def _make_table_info(self):
+        from lakekeeper.models import FileFormat, TableInfo
+
+        return TableInfo(
+            database="mydb",
+            table_name="tbl",
+            location="hdfs:///data",
+            file_format=FileFormat.PARQUET,
+            total_file_count=65000,
+            total_size_bytes=3 * 1024 * 1024 * 1024,
+            needs_compaction=True,
+        )
+
+    def _make_backup_info(self):
+        from lakekeeper.models import BackupInfo
+
+        return BackupInfo(
+            original_table="mydb.tbl",
+            backup_table="mydb.__bkp_tbl_20240101_120000",
+            original_location="hdfs:///data",
+            timestamp=MagicMock(),
+        )
+
+    @patch("lakekeeper.cli._get_engine")
+    def test_analyze_stats_flag_sets_option(self, mock_get_engine):
+        """--analyze-stats flag enables analyze_after_compaction in the config passed to engine."""
+        from lakekeeper.models import CompactionReport, CompactionStatus
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.analyze.return_value = self._make_table_info()
+        mock_engine.create_backup.return_value = self._make_backup_info()
+        mock_engine.compact.return_value = CompactionReport(table_name="mydb.tbl", status=CompactionStatus.COMPLETED)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["compact", "--table", "mydb.tbl", "--analyze-stats"])
+        assert result.exit_code == 0
+
+        # Verify the config passed to _get_engine has analyze_after_compaction=True
+        called_config = mock_get_engine.call_args[0][0]
+        assert called_config.analyze_after_compaction is True
+
+    @patch("lakekeeper.cli._get_engine")
+    def test_no_analyze_stats_flag_disables_option(self, mock_get_engine, tmp_path):
+        """--no-analyze-stats overrides YAML analyze_after_compaction: true."""
+        from lakekeeper.models import FileFormat, TableInfo
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("analyze_after_compaction: true\n")
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.analyze.return_value = TableInfo(
+            database="mydb",
+            table_name="tbl",
+            location="hdfs:///data",
+            file_format=FileFormat.PARQUET,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["compact", "--table", "mydb.tbl", "--config-file", str(config_file), "--no-analyze-stats"],
+        )
+        assert result.exit_code == 0
+
+        called_config = mock_get_engine.call_args[0][0]
+        assert called_config.analyze_after_compaction is False
+
+    @patch("lakekeeper.cli._get_engine")
+    def test_yaml_analyze_stats_respected_without_flag(self, mock_get_engine, tmp_path):
+        """Without --analyze-stats or --no-analyze-stats, YAML value is preserved."""
+        from lakekeeper.models import FileFormat, TableInfo
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("analyze_after_compaction: true\n")
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.analyze.return_value = TableInfo(
+            database="mydb",
+            table_name="tbl",
+            location="hdfs:///data",
+            file_format=FileFormat.PARQUET,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["compact", "--table", "mydb.tbl", "--config-file", str(config_file)],
+        )
+        assert result.exit_code == 0
+
+        called_config = mock_get_engine.call_args[0][0]
+        assert called_config.analyze_after_compaction is True

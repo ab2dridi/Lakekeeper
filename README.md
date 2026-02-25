@@ -31,10 +31,13 @@ Lakekeeper compacts Hive external tables safely:
 
 - **No `saveAsTable`** — the table's Metastore location never changes, preserving lineage and catalog properties (Apache Atlas and compatible systems)
 - **Zero-copy backups** — DDL clone (`SHOW CREATE TABLE`) pointing to the original location, no data duplication
-- **External tables only** — MANAGED tables are detected and skipped automatically
+- **External tables only** — MANAGED and Iceberg tables are detected and skipped automatically
 - **Per-partition compaction** — only compacts partitions that exceed the small-file threshold, untouched partitions are skipped
 - **Dynamic target file count** — computed from actual data size and configured HDFS block size
 - **Row count verification** — aborts and rolls back automatically if counts do not match after compaction
+- **Compression codec preservation** — detects the source table's codec from `TBLPROPERTIES` (`parquet.compression` / `orc.compress`) and passes it explicitly to the writer; Spark's session default is never silently applied
+- **Sort order preservation** — optionally re-sorts data before coalescing to restore predicate-pruning efficiency; priority: CLI `--sort-columns` > YAML per-table config > DDL `SORTED BY` auto-detection
+- **Skewed distribution detection** — uses `min(avg, median)` as the effective file size; catches tables where a few large files inflate the average while dozens of tiny files go undetected
 
 ---
 
@@ -105,7 +108,16 @@ pip install lakekeeper
 conda-pack -o lakekeeper_env.tar.gz
 ```
 
-**Step 2 — Write a config file**
+**Step 2 — Generate a starter config file**
+
+```bash
+# Generate a commented template (then edit the values for your cluster)
+lakekeeper generate-config --output lakekeeper.yaml
+```
+
+Or copy [`lakekeeper.example.yaml`](lakekeeper.example.yaml) from the repository root.
+
+**Step 2b — Edit the config file**
 
 ```yaml
 # lakekeeper.yaml
@@ -195,10 +207,11 @@ Options:
   --help                  Show help and exit.
 
 Commands:
-  analyze   Analyze tables and report compaction needs (dry-run, no writes).
-  compact   Compact Hive external tables.
-  rollback  Rollback a table to its pre-compaction state.
-  cleanup   Remove backup tables and reclaim HDFS space.
+  analyze          Analyze tables and report compaction needs (dry-run, no writes).
+  compact          Compact Hive external tables.
+  rollback         Rollback a table to its pre-compaction state.
+  cleanup          Remove backup tables and reclaim HDFS space.
+  generate-config  Generate a commented lakekeeper.yaml configuration template.
 ```
 
 > **`--config-file` placement:** Pass it before the subcommand name:
@@ -221,7 +234,10 @@ lakekeeper compact --database mydb
 lakekeeper compact --table mydb.events
 lakekeeper compact --tables mydb.events,mydb.users
 lakekeeper compact --database mydb --block-size 256 --ratio-threshold 5
-lakekeeper compact --database mydb --dry-run   # analyze only, no writes
+lakekeeper compact --database mydb --dry-run                          # analyze only, no writes
+lakekeeper compact --table mydb.events --sort-columns date,user_id   # re-sort before coalescing
+lakekeeper compact --table mydb.events --analyze-stats               # refresh Metastore stats after
+lakekeeper compact --table mydb.events --no-analyze-stats            # disable stats (overrides YAML)
 ```
 
 ### rollback
@@ -246,16 +262,19 @@ lakekeeper cleanup --database mydb --older-than 7d  # remove backups older than 
 | Parameter | Default | CLI flag | Description |
 |---|---|---|---|
 | `block_size_mb` | `128` | `--block-size` | Target HDFS block size in MB |
-| `compaction_ratio_threshold` | `10.0` | `--ratio-threshold` | Compact if avg file size < block_size / ratio |
+| `compaction_ratio_threshold` | `10.0` | `--ratio-threshold` | Compact if `min(avg, median)` file size < block_size / ratio |
 | `backup_prefix` | `__bkp` | — | Prefix for backup table names |
 | `dry_run` | `false` | `--dry-run` | Analyze only, no writes |
 | `log_level` | `INFO` | `--log-level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `sort_columns` | `{}` | `--sort-columns` | Per-table sort columns (see [Sort order](#sort-order-preservation)) |
+| `analyze_after_compaction` | `false` | `--analyze-stats` / `--no-analyze-stats` | Run `ANALYZE TABLE COMPUTE STATISTICS` after each successful compaction |
 
 ### spark_submit parameters
 
 | Parameter | Default | Description |
 |---|---|---|
 | `enabled` | `false` | Enable automatic spark-submit launch |
+| `submit_command` | `spark-submit` | Submit binary name (use `spark3-submit` on clusters where `spark-submit` points to Spark 2) |
 | `master` | `yarn` | Spark master URL |
 | `deploy_mode` | `client` | `client` or `cluster` |
 | `principal` | — | Kerberos principal (e.g. `user@REALM.COM`) |
@@ -269,7 +288,8 @@ lakekeeper cleanup --database mydb --older-than 7d  # remove backups older than 
 | `driver_memory` | — | `--driver-memory` |
 | `script_path` | `run_lakekeeper.py` | Path to the entry-point script passed to spark-submit |
 | `extra_conf` | `{}` | Additional `--conf key=value` pairs |
-| `extra_files` | `[]` | Files distributed to executors via `--files` (e.g. `hive-site.xml`) |
+| `extra_files` | `[]` | Files distributed to the driver via `--files` (e.g. `hive-site.xml`) |
+| `py_files` | `[]` | Python dependencies distributed via `--py-files` (e.g. a wheel or zip) |
 
 ---
 
@@ -354,6 +374,40 @@ lakekeeper cleanup --table mydb.events
 2. For each: deletes the `__old_*` HDFS directory it points to, then drops the backup table
 
 **Cleanup is irreversible.** Once run, rollback is no longer possible for the cleaned backups.
+
+---
+
+## Sort order preservation
+
+`coalesce()` does not preserve sort order. If the original table's files were
+written sorted (e.g. by `date` or `user_id`) for predicate-pruning efficiency,
+Lakekeeper can re-apply the sort before coalescing.
+
+Three ways to configure sort columns, in descending priority:
+
+### 1 — CLI (one table, ad-hoc)
+
+```bash
+lakekeeper compact --table mydb.events --sort-columns date,user_id
+```
+
+### 2 — YAML (per-table, persistent across runs)
+
+```yaml
+sort_columns:
+  mydb.events: [date, user_id]
+  mydb.logs:   [year, month, day]
+```
+
+### 3 — DDL auto-detect (zero config)
+
+If the table was created with `CLUSTERED BY … SORTED BY …`, Lakekeeper reads
+the `Sort Columns` field from `DESCRIBE FORMATTED` and sorts automatically —
+no explicit configuration needed.
+
+> **Note:** Sorting triggers a Spark shuffle before coalescing, which increases
+> execution time and memory usage. Use it only for tables where sort order
+> materially improves downstream query performance.
 
 ---
 

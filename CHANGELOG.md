@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.0.6] - 2026-02-25
+
+### Added
+
+- **`lakekeeper generate-config`** — new CLI command that writes a fully-commented
+  `lakekeeper.yaml` template to disk. Supports `--output / -o` to change the destination
+  path and `--force / -f` to overwrite an existing file without prompting. A copy of the
+  template is also shipped in the repo as `lakekeeper.example.yaml`.
+- **Compression codec preservation** — the compaction writer now explicitly reads the
+  source table's compression codec from `TBLPROPERTIES` (`parquet.compression` for
+  Parquet, `orc.compress` for ORC) and passes it to the Spark writer, preventing the
+  session-level default codec from silently changing the output format.
+- **Sort order preservation (`sort_columns`)** — new config key (YAML and CLI
+  `--sort-columns col1,col2`) re-sorts data before `coalesce()`. Priority:
+  `--sort-columns` (highest) → YAML `sort_columns` → DDL `SORTED BY` auto-detection → no
+  sort. Only applies to tables where column order materially improves downstream query
+  performance (sorting triggers a Spark shuffle).
+- **`analyze_after_compaction`** — new boolean config option (default `false`); when
+  enabled, lakekeeper runs `ANALYZE TABLE … COMPUTE STATISTICS` after each successful
+  compaction to refresh `rowCount` / `numFiles` / `totalSize` in the Hive Metastore.
+  Failures are non-fatal (logged as warnings). CLI counterpart:
+  `--analyze-stats / --no-analyze-stats` (overrides YAML value).
+- **Iceberg table guard** — tables using the Iceberg `InputFormat` or `SerDe` are now
+  detected at analysis time and skipped with a clear `SkipTableError` message, rather
+  than silently corrupting the Iceberg snapshot chain.
+- **`submit_command` in `spark_submit` config** — allows selecting an alternate
+  spark-submit binary (e.g. `spark3-submit` on Cloudera CDP clusters where
+  `spark-submit` points to Spark 2).
+- **`py_files` in `spark_submit` config** — new list field rendered as `--py-files
+  file1,file2` in the spark-submit command, for distributing Python wheels or zips to
+  executors.
+- **Skewed file-distribution detection** — the compaction threshold now uses
+  `min(avg_file_size, median_file_size)` (the *effective file size*) instead of the
+  arithmetic mean alone. This catches tables where a handful of large files inflate the
+  average while dozens of tiny files remain below the threshold. Individual file sizes are
+  collected inside the existing `listFiles` loop at no extra HDFS I/O cost.
+
+[0.0.6]: https://github.com/ab2dridi/Lakekeeper/releases/tag/v0.0.6
+
+---
+
 ## [0.0.5] - 2026-02-24
 
 ### Fixed

@@ -85,8 +85,7 @@ class TestBuildSparkSubmitCommand:
         assert "--files" in cmd
         files_idx = cmd.index("--files")
         assert cmd[files_idx + 1] == (
-            "/etc/hive/conf.cloudera.hive/hive-site.xml,"
-            "/etc/hive/conf.cloudera.hive/hdfs-site.xml"
+            "/etc/hive/conf.cloudera.hive/hive-site.xml,/etc/hive/conf.cloudera.hive/hdfs-site.xml"
         )
 
     def test_custom_script_path(self):

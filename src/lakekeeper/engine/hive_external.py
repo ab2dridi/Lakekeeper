@@ -11,6 +11,7 @@ from lakekeeper.core.analyzer import TableAnalyzer
 from lakekeeper.core.backup import BackupManager
 from lakekeeper.core.compactor import Compactor
 from lakekeeper.engine.base import CompactionEngine
+from lakekeeper.models import CompactionStatus
 from lakekeeper.utils.hdfs import HdfsClient
 
 if TYPE_CHECKING:
@@ -72,7 +73,14 @@ class HiveExternalEngine(CompactionEngine):
         Returns:
             CompactionReport with results.
         """
-        return self._compactor.compact_table(table_info, backup_info)
+        report = self._compactor.compact_table(table_info, backup_info)
+        if (
+            self._config.analyze_after_compaction
+            and not self._config.dry_run
+            and report.status == CompactionStatus.COMPLETED
+        ):
+            self._run_analyze_stats(table_info)
+        return report
 
     def rollback(self, database: str, table_name: str, backup_table: str | None = None) -> BackupInfo:
         """Rollback a table to its pre-compaction state.
@@ -240,6 +248,45 @@ class HiveExternalEngine(CompactionEngine):
                 logger.debug("Skipping table %s.%s (could not describe)", database, tbl)
 
         return external_tables
+
+    def _run_analyze_stats(self, table_info: TableInfo) -> None:
+        """Run ANALYZE TABLE COMPUTE STATISTICS after a successful compaction.
+
+        For partitioned tables, statistics are updated per compacted partition
+        first, then at the table level.  For non-partitioned tables only the
+        table-level command is issued.
+
+        These commands refresh rowCount / numFiles / totalSize in the Hive
+        Metastore so that the query planner uses accurate statistics for the
+        freshly compacted data.
+
+        Args:
+            table_info: TableInfo from the compaction run (partitions carry
+                ``needs_compaction=True`` for partitions that were compacted).
+        """
+        full_name = table_info.full_name
+
+        if table_info.is_partitioned:
+            compacted = [p for p in table_info.partitions if p.needs_compaction]
+            for part in compacted:
+                sql = f"ANALYZE TABLE {full_name} PARTITION({part.partition_sql_spec}) COMPUTE STATISTICS"
+                logger.info("Analyzing partition stats: %s", sql)
+                try:
+                    self._spark.sql(sql)
+                except Exception:
+                    logger.warning(
+                        "ANALYZE TABLE partition failed for %s (%s)",
+                        full_name,
+                        part.partition_spec_str,
+                        exc_info=True,
+                    )
+
+        sql = f"ANALYZE TABLE {full_name} COMPUTE STATISTICS"
+        logger.info("Analyzing table stats: %s", sql)
+        try:
+            self._spark.sql(sql)
+        except Exception:
+            logger.warning("ANALYZE TABLE failed for %s", full_name, exc_info=True)
 
     def _delete_old_data_dirs(self, backup_table: str) -> None:
         """Delete HDFS ``__old_*`` directories referenced by a backup table.

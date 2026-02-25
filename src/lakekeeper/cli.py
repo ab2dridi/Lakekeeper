@@ -360,6 +360,12 @@ def analyze(ctx: click.Context, **kwargs: str | None) -> None:
     default=None,
     help="Sort columns before coalescing (comma-separated, e.g. 'date,user_id'). Only applies when --table is used.",
 )
+@click.option(
+    "--analyze-stats/--no-analyze-stats",
+    "analyze_after_compaction",
+    default=None,
+    help="Run ANALYZE TABLE COMPUTE STATISTICS after compaction (overrides YAML analyze_after_compaction).",
+)
 @click.pass_context
 def compact(ctx: click.Context, sort_columns_str: str | None = None, **kwargs: str | None) -> None:
     """Compact Hive external tables."""

@@ -236,6 +236,8 @@ lakekeeper compact --tables mydb.events,mydb.users
 lakekeeper compact --database mydb --block-size 256 --ratio-threshold 5
 lakekeeper compact --database mydb --dry-run                          # analyze only, no writes
 lakekeeper compact --table mydb.events --sort-columns date,user_id   # re-sort before coalescing
+lakekeeper compact --table mydb.events --analyze-stats               # refresh Metastore stats after
+lakekeeper compact --table mydb.events --no-analyze-stats            # disable stats (overrides YAML)
 ```
 
 ### rollback
@@ -265,7 +267,7 @@ lakekeeper cleanup --database mydb --older-than 7d  # remove backups older than 
 | `dry_run` | `false` | `--dry-run` | Analyze only, no writes |
 | `log_level` | `INFO` | `--log-level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `sort_columns` | `{}` | `--sort-columns` | Per-table sort columns (see [Sort order](#sort-order-preservation)) |
-| `analyze_after_compaction` | `false` | — | Run `ANALYZE TABLE COMPUTE STATISTICS` after each successful compaction |
+| `analyze_after_compaction` | `false` | `--analyze-stats` / `--no-analyze-stats` | Run `ANALYZE TABLE COMPUTE STATISTICS` after each successful compaction |
 
 ### spark_submit parameters
 

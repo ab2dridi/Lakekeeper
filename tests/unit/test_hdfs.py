@@ -39,8 +39,8 @@ class TestHdfsFileInfo:
         info = HdfsFileInfo(file_count=100, total_size_bytes=total, file_sizes=sizes)
         # avg is pulled up by the large files; median is tiny
         assert info.avg_file_size_bytes > 40 * 1024 * 1024  # avg > 40 MB
-        assert info.median_file_size_bytes == tiny           # median = 100 bytes
-        assert info.effective_file_size_bytes == tiny        # min picks median
+        assert info.median_file_size_bytes == tiny  # median = 100 bytes
+        assert info.effective_file_size_bytes == tiny  # min picks median
 
     def test_effective_size_equals_avg_when_uniform(self):
         sizes = [1000] * 10

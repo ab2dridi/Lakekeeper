@@ -63,8 +63,7 @@ class TableAnalyzer:
         table_type = desc_map.get("Table Type", desc_map.get("Table Type:", "")).strip().upper()
         if table_type and "EXTERNAL" not in table_type:
             raise SkipTableError(
-                f"not an external table (Table Type: {table_type}). "
-                "Lakekeeper only supports EXTERNAL tables."
+                f"not an external table (Table Type: {table_type}). Lakekeeper only supports EXTERNAL tables."
             )
 
         # Iceberg tables are EXTERNAL in the Metastore but use a completely different

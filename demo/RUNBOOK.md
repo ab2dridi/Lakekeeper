@@ -21,7 +21,13 @@ cleanup (and rollback if needed).
 
 ## Step 1 — Write the config file
 
-Create `lakekeeper.yaml` on the edge node:
+Generate a fully-commented template, then edit the values:
+
+```bash
+lakekeeper generate-config --output lakekeeper.yaml
+```
+
+Or write `lakekeeper.yaml` manually on the edge node:
 
 ```yaml
 # lakekeeper.yaml
@@ -29,8 +35,21 @@ block_size_mb: 128
 compaction_ratio_threshold: 10.0
 log_level: INFO
 
+# Run ANALYZE TABLE COMPUTE STATISTICS after each successful compaction
+# (refreshes rowCount / numFiles in the Metastore). Default: false.
+# Can also be toggled at runtime: --analyze-stats / --no-analyze-stats
+analyze_after_compaction: false
+
+# Re-sort specific tables before coalescing to preserve predicate-pruning
+# efficiency. Sorting triggers a Spark shuffle — only enable when needed.
+# Can also be set per-run: --sort-columns col1,col2 (single table only)
+# sort_columns:
+#   <database>.lakekeeper_events: [date]
+
 spark_submit:
   enabled: true
+  # Use spark3-submit on clusters where spark-submit points to Spark 2.
+  submit_command: spark-submit
   master: yarn
   deploy_mode: cluster
   principal: youruser@YOUR.REALM.COM
@@ -49,6 +68,9 @@ spark_submit:
   extra_files:
     - /etc/hive/conf.cloudera.hive/hive-site.xml
     - /etc/hive/conf.cloudera.hive/hdfs-site.xml
+  # Python wheels or zips distributed to executors via --py-files.
+  # py_files:
+  #   - /opt/mypackage.whl
 ```
 
 > **Note — deploy_mode cluster:** In cluster mode the driver runs on a YARN
@@ -190,14 +212,29 @@ lakekeeper --config-file lakekeeper.yaml compact --table <database>.lakekeeper_e
 # Or compact all demo tables at once
 lakekeeper --config-file lakekeeper.yaml compact \
   --tables <database>.lakekeeper_flat,<database>.lakekeeper_events,<database>.lakekeeper_events_2p
+
+# Re-sort before coalescing (preserves column sort order for predicate pruning)
+lakekeeper --config-file lakekeeper.yaml compact \
+  --table <database>.lakekeeper_events --sort-columns date
+
+# Refresh Metastore statistics after compaction (updates rowCount / numFiles)
+lakekeeper --config-file lakekeeper.yaml compact \
+  --table <database>.lakekeeper_flat --analyze-stats
 ```
 
 What happens internally:
 1. Creates a zero-copy backup table (`__bkp_<table>_<timestamp>`)
 2. Writes compacted data to a temp HDFS directory (`<table>__compact_tmp_<ts>`)
+   - Compression codec is read from `TBLPROPERTIES` (`parquet.compression` /
+     `orc.compress`) and passed explicitly to the writer — the session default
+     is never silently applied.
+   - If `sort_columns` is configured, data is sorted before `coalesce()`.
 3. Verifies row count — aborts automatically if counts differ
 4. Atomic HDFS rename swap: original → `<table>__old_<ts>`, compacted → `<table>`
 5. Updates backup table pointer to `__old_<ts>` (rollback safety net)
+6. If `analyze_after_compaction: true` (or `--analyze-stats`): runs
+   `ANALYZE TABLE … COMPUTE STATISTICS` per compacted partition then
+   at the table level to refresh Metastore stats.
 
 ---
 

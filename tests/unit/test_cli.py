@@ -616,8 +616,10 @@ class TestAnalyzeStatsFlag:
 
     def _make_table_info(self):
         from lakekeeper.models import FileFormat, TableInfo
+
         return TableInfo(
-            database="mydb", table_name="tbl",
+            database="mydb",
+            table_name="tbl",
             location="hdfs:///data",
             file_format=FileFormat.PARQUET,
             total_file_count=65000,
@@ -627,6 +629,7 @@ class TestAnalyzeStatsFlag:
 
     def _make_backup_info(self):
         from lakekeeper.models import BackupInfo
+
         return BackupInfo(
             original_table="mydb.tbl",
             backup_table="mydb.__bkp_tbl_20240101_120000",
@@ -643,9 +646,7 @@ class TestAnalyzeStatsFlag:
         mock_get_engine.return_value = mock_engine
         mock_engine.analyze.return_value = self._make_table_info()
         mock_engine.create_backup.return_value = self._make_backup_info()
-        mock_engine.compact.return_value = CompactionReport(
-            table_name="mydb.tbl", status=CompactionStatus.COMPLETED
-        )
+        mock_engine.compact.return_value = CompactionReport(table_name="mydb.tbl", status=CompactionStatus.COMPLETED)
 
         runner = CliRunner()
         result = runner.invoke(main, ["compact", "--table", "mydb.tbl", "--analyze-stats"])
@@ -666,7 +667,8 @@ class TestAnalyzeStatsFlag:
         mock_engine = MagicMock()
         mock_get_engine.return_value = mock_engine
         mock_engine.analyze.return_value = TableInfo(
-            database="mydb", table_name="tbl",
+            database="mydb",
+            table_name="tbl",
             location="hdfs:///data",
             file_format=FileFormat.PARQUET,
         )
@@ -692,7 +694,8 @@ class TestAnalyzeStatsFlag:
         mock_engine = MagicMock()
         mock_get_engine.return_value = mock_engine
         mock_engine.analyze.return_value = TableInfo(
-            database="mydb", table_name="tbl",
+            database="mydb",
+            table_name="tbl",
             location="hdfs:///data",
             file_format=FileFormat.PARQUET,
         )

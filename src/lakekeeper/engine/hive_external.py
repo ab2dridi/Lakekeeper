@@ -274,7 +274,12 @@ class HiveExternalEngine(CompactionEngine):
                 try:
                     self._spark.sql(sql)
                 except Exception:
-                    logger.warning("ANALYZE TABLE partition failed for %s (%s)", full_name, part.partition_spec_str, exc_info=True)
+                    logger.warning(
+                        "ANALYZE TABLE partition failed for %s (%s)",
+                        full_name,
+                        part.partition_spec_str,
+                        exc_info=True,
+                    )
 
         sql = f"ANALYZE TABLE {full_name} COMPUTE STATISTICS"
         logger.info("Analyzing table stats: %s", sql)

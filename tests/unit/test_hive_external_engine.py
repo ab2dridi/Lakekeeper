@@ -341,7 +341,8 @@ class TestAnalyzeAfterCompaction:
             table_name="mydb.events", status=CompactionStatus.COMPLETED
         )
         table_info = TableInfo(
-            database="mydb", table_name="events",
+            database="mydb",
+            table_name="events",
             location="hdfs:///data/mydb/events",
             file_format=FileFormat.PARQUET,
             is_partitioned=False,
@@ -360,7 +361,8 @@ class TestAnalyzeAfterCompaction:
             table_name="mydb.events", status=CompactionStatus.COMPLETED
         )
         table_info = TableInfo(
-            database="mydb", table_name="events",
+            database="mydb",
+            table_name="events",
             location="hdfs:///data/mydb/events",
             file_format=FileFormat.PARQUET,
             is_partitioned=False,
@@ -379,7 +381,8 @@ class TestAnalyzeAfterCompaction:
             table_name="mydb.events", status=CompactionStatus.FAILED
         )
         table_info = TableInfo(
-            database="mydb", table_name="events",
+            database="mydb",
+            table_name="events",
             location="hdfs:///data/mydb/events",
             file_format=FileFormat.PARQUET,
             is_partitioned=False,
@@ -399,7 +402,8 @@ class TestAnalyzeAfterCompaction:
             table_name="mydb.events", status=CompactionStatus.COMPLETED
         )
         table_info = TableInfo(
-            database="mydb", table_name="events",
+            database="mydb",
+            table_name="events",
             location="hdfs:///data/mydb/events",
             file_format=FileFormat.PARQUET,
             is_partitioned=False,
@@ -410,9 +414,7 @@ class TestAnalyzeAfterCompaction:
         sql_calls = [call.args[0] for call in mock_spark.sql.call_args_list]
         assert not any("ANALYZE TABLE" in c for c in sql_calls)
 
-    def test_analyze_partitioned_table_per_partition_and_table(
-        self, mock_spark, config, sample_partitioned_table_info
-    ):
+    def test_analyze_partitioned_table_per_partition_and_table(self, mock_spark, config, sample_partitioned_table_info):
         """Partitioned table: per-compacted-partition ANALYZE then table-level ANALYZE."""
         config.analyze_after_compaction = True
         engine = self._make_engine(mock_spark, config)
@@ -420,23 +422,24 @@ class TestAnalyzeAfterCompaction:
             table_name="mydb.logs", status=CompactionStatus.COMPLETED
         )
 
-        engine.compact(sample_partitioned_table_info, BackupInfo(
-            original_table="mydb.logs",
-            backup_table="mydb.__bkp_logs_20240101_120000",
-            original_location="hdfs:///data/mydb/logs",
-            timestamp=datetime(2024, 1, 1),
-        ))
+        engine.compact(
+            sample_partitioned_table_info,
+            BackupInfo(
+                original_table="mydb.logs",
+                backup_table="mydb.__bkp_logs_20240101_120000",
+                original_location="hdfs:///data/mydb/logs",
+                timestamp=datetime(2024, 1, 1),
+            ),
+        )
 
         sql_calls = [call.args[0] for call in mock_spark.sql.call_args_list]
         # One compacted partition (year=2024, month=01) — needs_compaction=True
         assert any(
-            "ANALYZE TABLE mydb.logs PARTITION(year='2024', month='01') COMPUTE STATISTICS" in c
-            for c in sql_calls
+            "ANALYZE TABLE mydb.logs PARTITION(year='2024', month='01') COMPUTE STATISTICS" in c for c in sql_calls
         )
         # Skipped partition (year=2024, month=02) — needs_compaction=False
         assert not any(
-            "ANALYZE TABLE mydb.logs PARTITION(year='2024', month='02') COMPUTE STATISTICS" in c
-            for c in sql_calls
+            "ANALYZE TABLE mydb.logs PARTITION(year='2024', month='02') COMPUTE STATISTICS" in c for c in sql_calls
         )
         # Table-level stats always run
         assert any("ANALYZE TABLE mydb.logs COMPUTE STATISTICS" in c for c in sql_calls)
@@ -451,7 +454,8 @@ class TestAnalyzeAfterCompaction:
         mock_spark.sql.side_effect = Exception("Metastore unavailable")
 
         table_info = TableInfo(
-            database="mydb", table_name="events",
+            database="mydb",
+            table_name="events",
             location="hdfs:///data/mydb/events",
             file_format=FileFormat.PARQUET,
             is_partitioned=False,

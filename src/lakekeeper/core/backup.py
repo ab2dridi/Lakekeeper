@@ -70,9 +70,7 @@ class BackupManager:
         self._spark.sql(backup_ddl)
 
         # Ensure the backup table never deletes HDFS data when dropped.
-        self._spark.sql(
-            f"ALTER TABLE {full_backup} SET TBLPROPERTIES ('external.table.purge'='false')"
-        )
+        self._spark.sql(f"ALTER TABLE {full_backup} SET TBLPROPERTIES ('external.table.purge'='false')")
 
         partition_locations: dict[str, str] = {}
 

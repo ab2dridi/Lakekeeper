@@ -41,8 +41,11 @@ class HdfsFileInfo:
 
     @property
     def effective_file_size_bytes(self) -> int:
-        """min(avg, median) — catches skewed distributions where a few large
-        files inflate the average while many tiny files remain undetected."""
+        """Min of avg and median file size.
+
+        Catches skewed distributions where a few large files inflate the
+        average while many tiny files remain undetected.
+        """
         return min(self.avg_file_size_bytes, self.median_file_size_bytes)
 
 

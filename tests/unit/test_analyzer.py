@@ -192,7 +192,6 @@ class TestTableAnalyzer:
         result = analyzer.analyze_table("mydb", "ext")
         assert result.database == "mydb"
 
-
     def test_compression_codec_detected_from_parquet_property(self, analyzer, mock_spark, mock_hdfs_client):
         """parquet.compression in TBLPROPERTIES is stored on TableInfo as lowercase."""
         desc_rows = [
@@ -254,12 +253,10 @@ class TestTableAnalyzer:
         ]
         mock_spark.sql.return_value.collect.side_effect = [
             desc_rows,
-            partition_rows,   # SHOW PARTITIONS
-            partition_desc,   # DESCRIBE FORMATTED ... PARTITION(...)
+            partition_rows,  # SHOW PARTITIONS
+            partition_desc,  # DESCRIBE FORMATTED ... PARTITION(...)
         ]
-        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(
-            file_count=100, total_size_bytes=100 * 1024 * 1024
-        )
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=100, total_size_bytes=100 * 1024 * 1024)
         result = analyzer.analyze_table("mydb", "events_2p")
         assert result.is_partitioned is True
         assert result.partition_columns == ["date", "ref"]
@@ -292,7 +289,7 @@ class TestTableAnalyzer:
         # 4. DESCRIBE FORMATTED PARTITION (ref=B location)
         mock_spark.sql.return_value.collect.side_effect = [
             desc_rows,
-            partition_rows,   # fallback — reused for _analyze_partitions
+            partition_rows,  # fallback — reused for _analyze_partitions
             partition_desc_a,
             partition_desc_b,
         ]
@@ -325,9 +322,7 @@ class TestTableAnalyzer:
             "SHOW PARTITIONS is not allowed on a table that is not partitioned"
         )
         mock_spark.sql.side_effect = [desc_result, show_partitions_result]
-        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(
-            file_count=10, total_size_bytes=10 * 1024 * 1024
-        )
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=10 * 1024 * 1024)
         result = analyzer.analyze_table("mydb", "flat")
         assert result.is_partitioned is False
 
@@ -339,7 +334,6 @@ class TestTableAnalyzer:
         mock_spark.sql.return_value.collect.return_value = rows
         result = analyzer._detect_partition_columns_fallback("mydb.t")
         assert result == ["year", "month", "day"]
-
 
     def test_get_partition_location_takes_first_occurrence(self, analyzer, mock_spark, mock_hdfs_client):
         """On Hive 3 / CDP, DESCRIBE FORMATTED PARTITION emits Location twice.
@@ -368,18 +362,15 @@ class TestTableAnalyzer:
         ]
         mock_spark.sql.return_value.collect.side_effect = [
             desc_rows,
-            partition_list,          # SHOW PARTITIONS
-            partition_desc_rows,     # DESCRIBE FORMATTED ... PARTITION(...)
+            partition_list,  # SHOW PARTITIONS
+            partition_desc_rows,  # DESCRIBE FORMATTED ... PARTITION(...)
         ]
-        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(
-            file_count=900, total_size_bytes=50 * 1024 * 1024
-        )
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=900, total_size_bytes=50 * 1024 * 1024)
         result = analyzer.analyze_table("mydb", "events_2p")
         assert result.is_partitioned is True
         assert len(result.partitions) == 1
         # partition.location must be the partition path, NOT the table root
         assert result.partitions[0].location == "hdfs:///data/mydb/events_2p/date=2024-01-01/ref=A"
-
 
     def test_three_level_partition_detected_from_describe(self, analyzer, mock_spark, mock_hdfs_client):
         """Three-level partition (year+month+day) detected correctly from DESCRIBE FORMATTED."""
@@ -407,7 +398,7 @@ class TestTableAnalyzer:
         ]
         mock_spark.sql.return_value.collect.side_effect = [
             desc_rows,
-            partition_rows,    # SHOW PARTITIONS
+            partition_rows,  # SHOW PARTITIONS
             partition_desc_a,  # DESCRIBE FORMATTED PARTITION (day=15)
             partition_desc_b,  # DESCRIBE FORMATTED PARTITION (day=16)
         ]
@@ -421,7 +412,7 @@ class TestTableAnalyzer:
         assert len(result.partitions) == 2
         assert result.partitions[0].location == "hdfs:///data/mydb/logs_3p/year=2024/month=01/day=15"
         assert result.partitions[1].location == "hdfs:///data/mydb/logs_3p/year=2024/month=01/day=16"
-        assert result.partitions[0].needs_compaction is True   # 800 small files
+        assert result.partitions[0].needs_compaction is True  # 800 small files
         assert result.partitions[1].needs_compaction is False  # 2 large files
 
     def test_four_level_partition_detected_from_describe(self, analyzer, mock_spark, mock_hdfs_client):
@@ -456,14 +447,12 @@ class TestTableAnalyzer:
         ]
         mock_spark.sql.return_value.collect.side_effect = [
             desc_rows,
-            partition_rows,    # SHOW PARTITIONS
+            partition_rows,  # SHOW PARTITIONS
             partition_desc_a,
             partition_desc_b,
             partition_desc_c,
         ]
-        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(
-            file_count=10, total_size_bytes=100 * 1024 * 1024
-        )
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=100 * 1024 * 1024)
         result = analyzer.analyze_table("mydb", "events_4p")
         assert result.is_partitioned is True
         assert result.partition_columns == ["year", "month", "day", "ref"]
@@ -499,7 +488,7 @@ class TestTableAnalyzer:
         # 4. DESCRIBE FORMATTED PARTITION (day=01)
         mock_spark.sql.return_value.collect.side_effect = [
             desc_rows,
-            partition_rows,    # fallback — reused for _analyze_partitions
+            partition_rows,  # fallback — reused for _analyze_partitions
             partition_desc_a,
             partition_desc_b,
         ]
@@ -533,9 +522,7 @@ class TestTableAnalyzer:
             partition_rows,  # fallback — reused for _analyze_partitions
             partition_desc,
         ]
-        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(
-            file_count=50, total_size_bytes=50 * 1024 * 1024
-        )
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=50, total_size_bytes=50 * 1024 * 1024)
         result = analyzer.analyze_table("mydb", "events_4p")
         assert result.is_partitioned is True
         assert result.partition_columns == ["year", "month", "day", "ref"]
@@ -570,12 +557,10 @@ class TestTableAnalyzer:
         ]
         mock_spark.sql.return_value.collect.side_effect = [
             desc_rows,
-            partition_list,       # SHOW PARTITIONS
+            partition_list,  # SHOW PARTITIONS
             partition_desc_rows,  # DESCRIBE FORMATTED PARTITION
         ]
-        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(
-            file_count=600, total_size_bytes=60 * 1024 * 1024
-        )
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=600, total_size_bytes=60 * 1024 * 1024)
         result = analyzer.analyze_table("mydb", "logs_3p")
         assert result.is_partitioned is True
         assert len(result.partitions) == 1
@@ -616,13 +601,11 @@ class TestTableAnalyzer:
         ]
         mock_spark.sql.return_value.collect.side_effect = [
             desc_rows,
-            partition_list,    # SHOW PARTITIONS
+            partition_list,  # SHOW PARTITIONS
             partition_desc_a,
             partition_desc_b,
         ]
-        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(
-            file_count=10, total_size_bytes=100 * 1024 * 1024
-        )
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=100 * 1024 * 1024)
         result = analyzer.analyze_table("mydb", "events_4p")
         assert result.is_partitioned is True
         assert len(result.partitions) == 2
@@ -663,7 +646,7 @@ class TestTableAnalyzer:
         ]
         # First partition: empty; second: 200 small files
         mock_hdfs_client.get_file_info.side_effect = [
-            HdfsFileInfo(file_count=0, total_size_bytes=0),           # empty — must be skipped
+            HdfsFileInfo(file_count=0, total_size_bytes=0),  # empty — must be skipped
             HdfsFileInfo(file_count=200, total_size_bytes=2 * 1024 * 1024),  # needs compaction
         ]
         result = analyzer.analyze_table("mydb", "events")
@@ -709,7 +692,7 @@ class TestTableAnalyzer:
         ]
         # Both partitions have 1 file, one tiny and one large
         mock_hdfs_client.get_file_info.side_effect = [
-            HdfsFileInfo(file_count=1, total_size_bytes=5 * 1024),        # 5 KB — tiny but 1 file
+            HdfsFileInfo(file_count=1, total_size_bytes=5 * 1024),  # 5 KB — tiny but 1 file
             HdfsFileInfo(file_count=1, total_size_bytes=500 * 1024 * 1024),  # 500 MB — large, 1 file
         ]
         result = analyzer.analyze_table("mydb", "events")
@@ -717,9 +700,7 @@ class TestTableAnalyzer:
         assert result.partitions[0].needs_compaction is False, (
             "Single tiny file must not trigger compaction (no files to merge with)"
         )
-        assert result.partitions[1].needs_compaction is False, (
-            "Single large file must not trigger compaction"
-        )
+        assert result.partitions[1].needs_compaction is False, "Single large file must not trigger compaction"
         assert result.needs_compaction is False
 
 
@@ -870,7 +851,7 @@ class TestMedianCompactionDetection:
         mock_spark.sql.return_value.collect.return_value = self._desc_rows()
 
         large = 2 * 1024 * 1024 * 1024  # 2 GB
-        tiny = 100                        # 100 bytes
+        tiny = 100  # 100 bytes
         sizes = [large, large] + [tiny] * 98
         mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(
             file_count=100,
@@ -886,9 +867,7 @@ class TestMedianCompactionDetection:
         assert result.median_file_size_bytes == tiny
         assert result.needs_compaction is True
 
-    def test_uniform_distribution_below_threshold_still_compacts(
-        self, analyzer, mock_spark, mock_hdfs_client
-    ):
+    def test_uniform_distribution_below_threshold_still_compacts(self, analyzer, mock_spark, mock_hdfs_client):
         """Uniform small files: avg == median == effective → compaction triggered as before."""
         mock_spark.sql.return_value.collect.return_value = self._desc_rows()
 
@@ -902,9 +881,7 @@ class TestMedianCompactionDetection:
         result = analyzer.analyze_table("mydb", "events")
         assert result.needs_compaction is True
 
-    def test_uniform_distribution_above_threshold_no_compaction(
-        self, analyzer, mock_spark, mock_hdfs_client
-    ):
+    def test_uniform_distribution_above_threshold_no_compaction(self, analyzer, mock_spark, mock_hdfs_client):
         """All files already large: avg == median → no compaction."""
         mock_spark.sql.return_value.collect.return_value = self._desc_rows()
 
@@ -932,9 +909,7 @@ class TestMedianCompactionDetection:
         result = analyzer.analyze_table("mydb", "events")
         assert result.median_file_size_bytes == 2000
 
-    def test_skewed_partition_triggers_compaction(
-        self, analyzer, mock_spark, mock_hdfs_client, config
-    ):
+    def test_skewed_partition_triggers_compaction(self, analyzer, mock_spark, mock_hdfs_client, config):
         """Partitioned table: skewed partition detected via effective_file_size_bytes."""
         desc_rows = [
             _make_row("Location", "hdfs:///data/mydb/logs", None),

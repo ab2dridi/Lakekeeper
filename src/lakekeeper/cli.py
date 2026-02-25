@@ -32,9 +32,7 @@ def _build_config(ctx: click.Context) -> LakekeeperConfig:
     return config.merge_cli_overrides(**params)
 
 
-def _extract_config_file_for_cluster(
-    args: list[str], deploy_mode: str
-) -> tuple[list[str], list[str]]:
+def _extract_config_file_for_cluster(args: list[str], deploy_mode: str) -> tuple[list[str], list[str]]:
     """Rewrite a local --config-file path so it works on a remote YARN driver.
 
     In ``--deploy-mode cluster`` the YARN driver runs on a remote node and
@@ -106,9 +104,7 @@ def _maybe_submit(config: LakekeeperConfig) -> None:
     # In --deploy-mode cluster, the YARN driver cannot read local edge-node
     # files.  Ship the config file via --files and rewrite the CLI arg to use
     # just the basename so the remote driver finds it in its working directory.
-    lakekeeper_args, extra_cfg_files = _extract_config_file_for_cluster(
-        sys.argv[1:], submit_cfg.deploy_mode
-    )
+    lakekeeper_args, extra_cfg_files = _extract_config_file_for_cluster(sys.argv[1:], submit_cfg.deploy_mode)
     if extra_cfg_files:
         submit_cfg = dataclasses.replace(
             submit_cfg,

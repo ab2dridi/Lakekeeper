@@ -83,6 +83,7 @@ class TableAnalyzer:
         file_format = self._detect_format(desc_map)
         partition_columns = self._detect_partition_columns(desc_rows)
         compression_codec = self._detect_compression(desc_map, file_format)
+        sort_columns = self._resolve_sort_columns(full_name, desc_map)
 
         table_info = TableInfo(
             database=database,
@@ -92,6 +93,7 @@ class TableAnalyzer:
             is_partitioned=len(partition_columns) > 0,
             partition_columns=partition_columns,
             compression_codec=compression_codec,
+            sort_columns=sort_columns,
         )
 
         if table_info.is_partitioned:
@@ -319,6 +321,45 @@ class TableAnalyzer:
         if codec:
             logger.debug("Detected compression codec from table properties: %s", codec)
         return codec
+
+    def _resolve_sort_columns(self, full_name: str, desc_map: dict[str, str]) -> list[str]:
+        """Resolve sort columns with priority: config (CLI/YAML) > DDL SORTED BY > none.
+
+        Args:
+            full_name: Fully qualified table name (db.table).
+            desc_map: DESCRIBE FORMATTED key/value pairs.
+
+        Returns:
+            List of column names to sort by before coalescing, or empty list.
+        """
+        # Highest priority: explicit config (CLI --sort-columns injects here, overriding YAML)
+        configured = self._config.sort_columns.get(full_name)
+        if configured:
+            logger.debug("Using configured sort columns for %s: %s", full_name, configured)
+            return list(configured)
+
+        # Fallback: DDL SORTED BY from DESCRIBE FORMATTED
+        ddl_cols = self._detect_sort_columns_from_ddl(desc_map)
+        if ddl_cols:
+            logger.debug("Using DDL sort columns for %s: %s", full_name, ddl_cols)
+        return ddl_cols
+
+    @staticmethod
+    def _detect_sort_columns_from_ddl(desc_map: dict[str, str]) -> list[str]:
+        """Detect sort columns from the 'Sort Columns' field in DESCRIBE FORMATTED.
+
+        Hive stores CLUSTERED BY … SORTED BY … DDL metadata as:
+            Sort Columns:    [{col:event_time, order:1}, {col:user_id, order:1}]
+        where order=1 is ASC and order=0 is DESC.
+
+        Returns column names in DDL order, or an empty list if absent.
+        """
+        raw = desc_map.get("Sort Columns", desc_map.get("Sort Columns:", "")).strip()
+        if not raw or raw in ("[]", ""):
+            return []
+        # Extract (col_name, order) pairs: "{col:event_time, order:1}"
+        pairs = re.findall(r"\{col:(\w+),\s*order:(\d+)\}", raw)
+        return [col for col, _order in pairs]
 
     def _determine_compaction_need(self, table_info: TableInfo) -> None:
         """Determine if a table needs compaction."""

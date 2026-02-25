@@ -74,6 +74,7 @@ class TableInfo:
     needs_compaction: bool = False
     row_count: int | None = None
     compression_codec: str | None = None
+    sort_columns: list[str] = field(default_factory=list)
 
     @property
     def full_name(self) -> str:

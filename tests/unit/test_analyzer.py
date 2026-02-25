@@ -743,3 +743,109 @@ class TestParsePartitionSpec:
     def test_empty_value(self):
         result = TableAnalyzer._parse_partition_spec("key=")
         assert result == {"key": ""}
+
+
+class TestDetectSortColumnsFromDdl:
+    """Unit tests for TableAnalyzer._detect_sort_columns_from_ddl (static method)."""
+
+    def test_single_sort_column(self):
+        desc_map = {"Sort Columns": "[{col:event_time, order:1}]"}
+        assert TableAnalyzer._detect_sort_columns_from_ddl(desc_map) == ["event_time"]
+
+    def test_multi_sort_columns(self):
+        desc_map = {"Sort Columns": "[{col:date, order:1}, {col:user_id, order:1}]"}
+        assert TableAnalyzer._detect_sort_columns_from_ddl(desc_map) == ["date", "user_id"]
+
+    def test_empty_brackets(self):
+        desc_map = {"Sort Columns": "[]"}
+        assert TableAnalyzer._detect_sort_columns_from_ddl(desc_map) == []
+
+    def test_key_absent(self):
+        assert TableAnalyzer._detect_sort_columns_from_ddl({}) == []
+
+    def test_key_with_colon_suffix(self):
+        """Some Hive/Spark versions emit 'Sort Columns:' with a trailing colon."""
+        desc_map = {"Sort Columns:": "[{col:ts, order:0}]"}
+        assert TableAnalyzer._detect_sort_columns_from_ddl(desc_map) == ["ts"]
+
+    def test_desc_order_column_included(self):
+        """Columns with order=0 (DESC) are still returned — caller decides sort direction."""
+        desc_map = {"Sort Columns": "[{col:ts, order:0}]"}
+        assert TableAnalyzer._detect_sort_columns_from_ddl(desc_map) == ["ts"]
+
+
+class TestSortColumnsIntegration:
+    """Integration tests for sort column resolution in analyze_table."""
+
+    @pytest.fixture
+    def analyzer(self, mock_spark, mock_hdfs_client, config):
+        return TableAnalyzer(mock_spark, mock_hdfs_client, config)
+
+    def _base_desc_rows(self, sort_columns_value=""):
+        """Base DESCRIBE FORMATTED rows; include Sort Columns when provided."""
+        rows = [
+            _make_row("Location", "hdfs:///data/mydb/tbl", None),
+            _make_row("Table Type", "EXTERNAL_TABLE", None),
+            _make_row("InputFormat", "org.apache.hadoop.hive.ql.io.parquet.MapRedParquetInputFormat", None),
+        ]
+        if sort_columns_value:
+            rows.append(_make_row("Sort Columns", sort_columns_value, None))
+        return rows
+
+    def test_sort_columns_detected_from_ddl(self, analyzer, mock_spark, mock_hdfs_client):
+        """Sort Columns in DESCRIBE FORMATTED are populated on TableInfo."""
+        desc_rows = self._base_desc_rows("[{col:event_time, order:1}]")
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=1024)
+
+        result = analyzer.analyze_table("mydb", "tbl")
+
+        assert result.sort_columns == ["event_time"]
+
+    def test_sort_columns_multi_detected_from_ddl(self, analyzer, mock_spark, mock_hdfs_client):
+        """Multiple Sort Columns in DDL are returned in order."""
+        desc_rows = self._base_desc_rows("[{col:date, order:1}, {col:user_id, order:1}]")
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=1024)
+
+        result = analyzer.analyze_table("mydb", "tbl")
+
+        assert result.sort_columns == ["date", "user_id"]
+
+    def test_sort_columns_empty_when_absent(self, analyzer, mock_spark, mock_hdfs_client):
+        """When Sort Columns is absent from DESCRIBE FORMATTED, sort_columns is []."""
+        desc_rows = self._base_desc_rows()  # no Sort Columns row
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=1024)
+
+        result = analyzer.analyze_table("mydb", "tbl")
+
+        assert result.sort_columns == []
+
+    def test_config_sort_columns_overrides_ddl(self, mock_spark, mock_hdfs_client, config):
+        """Config sort_columns takes priority over DDL Sort Columns."""
+        config.sort_columns["mydb.tbl"] = ["date", "region"]
+        analyzer = TableAnalyzer(mock_spark, mock_hdfs_client, config)
+
+        # DDL has a different sort column
+        desc_rows = self._base_desc_rows("[{col:event_time, order:1}]")
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=1024)
+
+        result = analyzer.analyze_table("mydb", "tbl")
+
+        # Config wins — DDL value is ignored
+        assert result.sort_columns == ["date", "region"]
+
+    def test_config_sort_columns_used_when_ddl_absent(self, mock_spark, mock_hdfs_client, config):
+        """Config sort_columns is used when DDL has no Sort Columns."""
+        config.sort_columns["mydb.tbl"] = ["ts"]
+        analyzer = TableAnalyzer(mock_spark, mock_hdfs_client, config)
+
+        desc_rows = self._base_desc_rows()  # no Sort Columns in DDL
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=1024)
+
+        result = analyzer.analyze_table("mydb", "tbl")
+
+        assert result.sort_columns == ["ts"]

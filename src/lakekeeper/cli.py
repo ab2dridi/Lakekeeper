@@ -215,12 +215,23 @@ def analyze(ctx: click.Context, **kwargs: str | None) -> None:
 @click.option("--dry-run", is_flag=True, help="Analyze only, do not compact.")
 @click.option("--config-file", "-c", help="YAML configuration file.")
 @click.option("--log-level", help="Log level (DEBUG, INFO, WARNING, ERROR).")
+@click.option(
+    "--sort-columns",
+    "sort_columns_str",
+    default=None,
+    help="Sort columns before coalescing (comma-separated, e.g. 'date,user_id'). Only applies when --table is used.",
+)
 @click.pass_context
-def compact(ctx: click.Context, **kwargs: str | None) -> None:
+def compact(ctx: click.Context, sort_columns_str: str | None = None, **kwargs: str | None) -> None:
     """Compact Hive external tables."""
     config = _build_config(ctx)
     if kwargs.get("tables"):
         config = config.merge_cli_overrides(tables=kwargs["tables"].split(","))
+    # CLI --sort-columns overrides YAML sort_columns for the specified table
+    if sort_columns_str and config.table:
+        sort_cols = [c.strip() for c in sort_columns_str.split(",") if c.strip()]
+        if sort_cols:
+            config.sort_columns[config.table] = sort_cols
     _maybe_submit(config)
     config.setup_logging()
 

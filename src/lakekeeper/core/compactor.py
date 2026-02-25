@@ -131,6 +131,9 @@ class Compactor:
         logger.info("Writing %d target files to %s", target_files, temp_location)
         self._temp_paths.append(temp_location)
         df = self._spark.read.format(format_str).load(location)
+        if table_info.sort_columns:
+            logger.info("Sorting by %s before coalescing", table_info.sort_columns)
+            df = df.sort(*table_info.sort_columns)
         writer = df.coalesce(target_files).write.format(format_str).mode("overwrite")
         if table_info.compression_codec:
             writer = writer.option("compression", table_info.compression_codec)
@@ -235,6 +238,8 @@ class Compactor:
         original_count = self._spark.read.format(format_str).load(location).count()
         self._temp_paths.append(temp_location)
         df = self._spark.read.format(format_str).load(location)
+        if table_info.sort_columns:
+            df = df.sort(*table_info.sort_columns)
         writer = df.coalesce(target_files).write.format(format_str).mode("overwrite")
         if table_info.compression_codec:
             writer = writer.option("compression", table_info.compression_codec)

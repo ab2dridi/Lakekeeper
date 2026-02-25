@@ -64,7 +64,7 @@ For development:
 
 ```bash
 git clone https://github.com/ab2dridi/Lakekeeper.git
-cd BeeKeeper
+cd Lakekeeper
 pip install ".[dev]"
 ```
 
@@ -461,7 +461,7 @@ path already exists. Resolve manually before retrying:
 
 ```bash
 git clone https://github.com/ab2dridi/Lakekeeper.git
-cd BeeKeeper
+cd Lakekeeper
 pip install ".[dev]"
 
 # Lint

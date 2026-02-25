@@ -603,3 +603,140 @@ class TestCompactor:
         # No rename or write should have occurred
         mock_hdfs_client.rename_path.assert_not_called()
         mock_spark.read.format.return_value.load.assert_not_called()
+
+    def test_compact_partitioned_with_sort_columns(
+        self,
+        compactor,
+        mock_spark,
+        mock_hdfs_client,
+        sample_partitioned_table_info,
+        mock_backup_mgr,
+    ):
+        """sort_columns on a partitioned table triggers df.sort() for each compacted partition."""
+        sample_partitioned_table_info.sort_columns = ["year", "month"]
+
+        backup_info = BackupInfo(
+            original_table="mydb.logs",
+            backup_table="mydb.__bkp_logs_20240101_120000",
+            original_location="hdfs:///data/mydb/logs",
+            timestamp=datetime(2024, 1, 1, 12, 0, 0),
+            partition_locations={
+                "year=2024/month=01": "hdfs:///data/mydb/logs/year=2024/month=01",
+            },
+        )
+
+        mock_df = MagicMock()
+        mock_df.count.return_value = 500
+        mock_df.sort.return_value = mock_df
+        mock_df.coalesce.return_value = mock_df
+        mock_df.write = MagicMock()
+        mock_df.write.format.return_value = mock_df.write
+        mock_df.write.mode.return_value = mock_df.write
+        mock_spark.read.format.return_value.load.return_value = mock_df
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(
+            file_count=8, total_size_bytes=1 * 1024 * 1024 * 1024
+        )
+
+        report = compactor.compact_table(sample_partitioned_table_info, backup_info)
+
+        assert report.status == CompactionStatus.COMPLETED
+        assert report.partitions_compacted == 1
+        mock_df.sort.assert_called_once_with("year", "month")
+
+    def test_compact_partitioned_compression_codec(
+        self,
+        compactor,
+        mock_spark,
+        mock_hdfs_client,
+        sample_partitioned_table_info,
+        mock_backup_mgr,
+    ):
+        """compression_codec on a partitioned table passes .option('compression', ...) to the writer."""
+        sample_partitioned_table_info.compression_codec = "gzip"
+
+        backup_info = BackupInfo(
+            original_table="mydb.logs",
+            backup_table="mydb.__bkp_logs_20240101_120000",
+            original_location="hdfs:///data/mydb/logs",
+            timestamp=datetime(2024, 1, 1, 12, 0, 0),
+            partition_locations={
+                "year=2024/month=01": "hdfs:///data/mydb/logs/year=2024/month=01",
+            },
+        )
+
+        mock_df = MagicMock()
+        mock_df.count.return_value = 500
+        mock_df.coalesce.return_value = mock_df
+        mock_df.write = MagicMock()
+        mock_df.write.format.return_value = mock_df.write
+        mock_df.write.mode.return_value = mock_df.write
+        mock_df.write.option.return_value = mock_df.write
+        mock_spark.read.format.return_value.load.return_value = mock_df
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(
+            file_count=8, total_size_bytes=1 * 1024 * 1024 * 1024
+        )
+
+        report = compactor.compact_table(sample_partitioned_table_info, backup_info)
+
+        assert report.status == CompactionStatus.COMPLETED
+        mock_df.write.option.assert_called_with("compression", "gzip")
+
+    def test_compact_partitioned_three_levels_spec_sql(
+        self,
+        compactor,
+        mock_spark,
+        mock_hdfs_client,
+        mock_backup_mgr,
+    ):
+        """3-level partition spec is formatted correctly in update_partition_location call."""
+        from lakekeeper.models import FileFormat, PartitionInfo, TableInfo
+
+        table_info = TableInfo(
+            database="mydb",
+            table_name="logs",
+            location="hdfs:///data/mydb/logs",
+            file_format=FileFormat.ORC,
+            is_partitioned=True,
+            partition_columns=["year", "month", "day"],
+            partitions=[
+                PartitionInfo(
+                    spec={"year": "2024", "month": "01", "day": "15"},
+                    location="hdfs:///data/mydb/logs/year=2024/month=01/day=15",
+                    file_count=10,
+                    total_size_bytes=10 * 1024 * 1024,
+                    needs_compaction=True,
+                    target_files=1,
+                ),
+            ],
+            total_file_count=10,
+            total_size_bytes=10 * 1024 * 1024,
+            needs_compaction=True,
+        )
+        backup_info = BackupInfo(
+            original_table="mydb.logs",
+            backup_table="mydb.__bkp_logs_20240101_120000",
+            original_location="hdfs:///data/mydb/logs",
+            timestamp=datetime(2024, 1, 1, 12, 0, 0),
+            partition_locations={
+                "year=2024/month=01/day=15": "hdfs:///data/mydb/logs/year=2024/month=01/day=15",
+            },
+        )
+
+        mock_df = MagicMock()
+        mock_df.count.return_value = 100
+        mock_df.coalesce.return_value = mock_df
+        mock_df.write = MagicMock()
+        mock_df.write.format.return_value = mock_df.write
+        mock_df.write.mode.return_value = mock_df.write
+        mock_spark.read.format.return_value.load.return_value = mock_df
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=1, total_size_bytes=10 * 1024 * 1024)
+
+        report = compactor.compact_table(table_info, backup_info)
+
+        assert report.status == CompactionStatus.COMPLETED
+        assert report.partitions_compacted == 1
+        # Verify the 3-level SQL spec was passed correctly
+        call_args = mock_backup_mgr.update_partition_location.call_args
+        assert call_args is not None
+        spec_sql_arg = call_args[0][1]  # second positional arg
+        assert spec_sql_arg == "year='2024', month='01', day='15'"

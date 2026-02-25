@@ -109,6 +109,14 @@ def _sep(char: str = "─", width: int = 60) -> str:
     return char * width
 
 
+def _compact(engine: HiveExternalEngine, db: str, table: str):
+    """Analyze → backup → compact. Returns (info, report)."""
+    info = engine.analyze(db, table)
+    backup = engine.create_backup(info)
+    report = engine.compact(info, backup)
+    return info, report
+
+
 # ── Scenario 1: non-partitioned table ────────────────────────────────────────
 
 
@@ -143,12 +151,12 @@ def test_nonpartitioned(spark: SparkSession, warehouse: str) -> None:
     info = engine.analyze(db, table)
     assert info.needs_compaction, "Table should need compaction"
     avg_kb = info.avg_file_size_bytes / 1024
-    print(f"  analyze  → {info.file_count} files, avg {avg_kb:.1f} KB — needs_compaction={info.needs_compaction}")
+    print(f"  analyze  → {info.total_file_count} files, avg {avg_kb:.1f} KB — needs_compaction={info.needs_compaction}")
 
     # Compact
-    report = engine.compact(db, table)
+    _, report = _compact(engine, db, table)
     assert report.status == CompactionStatus.COMPLETED, f"Compact failed: {report}"
-    print(f"  compact  → {report.files_after} files after (was {report.files_before})")
+    print(f"  compact  → {report.after_file_count} files after (was {report.before_file_count})")
 
     # Row count preserved
     rows_after = spark.table(full).count()
@@ -202,12 +210,14 @@ def test_single_partition(spark: SparkSession, warehouse: str) -> None:
     info = engine.analyze(db, table)
     assert info.needs_compaction
     n_parts = len(info.partitions)
-    compaction_flag = info.needs_compaction
-    print(f"  analyze  → {info.file_count} files across {n_parts} partitions — needs_compaction={compaction_flag}")
+    print(
+        f"  analyze  → {info.total_file_count} files across {n_parts} partitions"
+        f" — needs_compaction={info.needs_compaction}"
+    )
 
-    report = engine.compact(db, table)
+    _, report = _compact(engine, db, table)
     assert report.status == CompactionStatus.COMPLETED, f"Compact failed: {report}"
-    print(f"  compact  → {report.files_after} files after (was {report.files_before})")
+    print(f"  compact  → {report.after_file_count} files after (was {report.before_file_count})")
 
     rows_after = spark.table(full).count()
     assert rows_after == rows_before, f"Row count changed: {rows_before} → {rows_after}"
@@ -263,12 +273,14 @@ def test_two_partitions(spark: SparkSession, warehouse: str) -> None:
     info = engine.analyze(db, table)
     assert info.needs_compaction
     n_parts = len(info.partitions)
-    compaction_flag = info.needs_compaction
-    print(f"  analyze  → {info.file_count} files across {n_parts} partitions — needs_compaction={compaction_flag}")
+    print(
+        f"  analyze  → {info.total_file_count} files across {n_parts} partitions"
+        f" — needs_compaction={info.needs_compaction}"
+    )
 
-    report = engine.compact(db, table)
+    _, report = _compact(engine, db, table)
     assert report.status == CompactionStatus.COMPLETED, f"Compact failed: {report}"
-    print(f"  compact  → {report.files_after} files after (was {report.files_before})")
+    print(f"  compact  → {report.after_file_count} files after (was {report.before_file_count})")
 
     rows_after = spark.table(full).count()
     assert rows_after == rows_before, f"Row count changed: {rows_before} → {rows_after}"
@@ -281,7 +293,7 @@ def test_two_partitions(spark: SparkSession, warehouse: str) -> None:
     print("  cleanup  → done")
 
 
-# ── Scenario 4: rollback ──────────────────────────────────────────────────────
+# ── Scenario 4: rollback (non-partitioned) ───────────────────────────────────
 
 
 def test_rollback(spark: SparkSession, warehouse: str) -> None:
@@ -310,9 +322,9 @@ def test_rollback(spark: SparkSession, warehouse: str) -> None:
     config = make_config()
     engine = HiveExternalEngine(spark, config)
 
-    report = engine.compact(db, table)
+    _, report = _compact(engine, db, table)
     assert report.status == CompactionStatus.COMPLETED
-    print(f"  compact  → {report.files_after} files after (was {report.files_before})")
+    print(f"  compact  → {report.after_file_count} files after (was {report.before_file_count})")
 
     engine.rollback(db, table)
     print("  rollback → done")
@@ -324,13 +336,403 @@ def test_rollback(spark: SparkSession, warehouse: str) -> None:
     print(f"  rows preserved after rollback: {rows_after_rollback} ✓")
 
 
+# ── Scenario 5: three-partition table (year / month / day) ───────────────────
+
+
+def test_three_partitions(spark: SparkSession, warehouse: str) -> None:
+    """Compact a table partitioned by (year, month, day) — 3 partition levels."""
+    db = "inttest_3p"
+    table = "events_3p"
+    full = f"{db}.{table}"
+    loc = f"{warehouse}/{db}.db/{table}"
+
+    setup_db(spark, db)
+    spark.sql(f"DROP TABLE IF EXISTS `{db}`.`{table}`")
+    spark.sql(f"""
+        CREATE EXTERNAL TABLE `{db}`.`{table}` (
+            event_id   BIGINT,
+            user_id    BIGINT,
+            event_type STRING
+        )
+        PARTITIONED BY (year STRING, month STRING, day STRING)
+        STORED AS PARQUET
+        LOCATION '{loc}'
+        TBLPROPERTIES ('external.table.purge' = 'false')
+    """)
+
+    combos = [
+        ("2024", "01", "01"),
+        ("2024", "01", "02"),
+        ("2024", "02", "01"),
+        ("2024", "02", "02"),
+    ]
+    total_rows = len(combos) * 500
+    for y, m, d in combos:
+        write_small_files(spark, f"{loc}/year={y}/month={m}/day={d}", n_rows=500, n_files=15)
+    spark.sql(f"MSCK REPAIR TABLE `{db}`.`{table}`")
+
+    rows_before = spark.table(full).count()
+    assert rows_before == total_rows, f"Expected {total_rows} rows, got {rows_before}"
+
+    config = make_config()
+    engine = HiveExternalEngine(spark, config)
+
+    info = engine.analyze(db, table)
+    assert info.needs_compaction, "Table should need compaction"
+    assert len(info.partition_columns) == 3, f"Expected 3 partition columns, got {info.partition_columns}"
+    assert info.partition_columns == ["year", "month", "day"]
+    n_parts = len(info.partitions)
+    print(
+        f"  analyze  → {info.total_file_count} files across {n_parts} partitions (3 levels)"
+        f" — needs_compaction={info.needs_compaction}"
+    )
+
+    _, report = _compact(engine, db, table)
+    assert report.status == CompactionStatus.COMPLETED, f"Compact failed: {report}"
+    assert report.partitions_compacted == len(combos)
+    print(
+        f"  compact  → {report.after_file_count} files after (was {report.before_file_count}),"
+        f" {report.partitions_compacted} partitions compacted"
+    )
+
+    rows_after = spark.table(full).count()
+    assert rows_after == rows_before, f"Row count changed: {rows_before} → {rows_after}"
+    print(f"  rows preserved: {rows_after} ✓")
+
+    info2 = engine.analyze(db, table)
+    assert not info2.needs_compaction, "Table should NOT need compaction after compact"
+    print(f"  re-analyze → needs_compaction={info2.needs_compaction} ✓")
+
+    engine.cleanup(db, table)
+    print("  cleanup  → done")
+
+
+# ── Scenario 6: four-partition table (year / month / day / ref) ──────────────
+
+
+def test_four_partitions(spark: SparkSession, warehouse: str) -> None:
+    """Compact a table partitioned by (year, month, day, ref) — 4 partition levels."""
+    db = "inttest_4p"
+    table = "events_4p"
+    full = f"{db}.{table}"
+    loc = f"{warehouse}/{db}.db/{table}"
+
+    setup_db(spark, db)
+    spark.sql(f"DROP TABLE IF EXISTS `{db}`.`{table}`")
+    spark.sql(f"""
+        CREATE EXTERNAL TABLE `{db}`.`{table}` (
+            event_id   BIGINT,
+            user_id    BIGINT,
+            event_type STRING
+        )
+        PARTITIONED BY (year STRING, month STRING, day STRING, ref STRING)
+        STORED AS PARQUET
+        LOCATION '{loc}'
+        TBLPROPERTIES ('external.table.purge' = 'false')
+    """)
+
+    combos = [
+        ("2024", "01", "01", "A"),
+        ("2024", "01", "01", "B"),
+        ("2024", "01", "02", "A"),
+        ("2024", "01", "02", "B"),
+    ]
+    total_rows = len(combos) * 300
+    for y, m, d, r in combos:
+        write_small_files(spark, f"{loc}/year={y}/month={m}/day={d}/ref={r}", n_rows=300, n_files=12)
+    spark.sql(f"MSCK REPAIR TABLE `{db}`.`{table}`")
+
+    rows_before = spark.table(full).count()
+    assert rows_before == total_rows, f"Expected {total_rows} rows, got {rows_before}"
+
+    config = make_config()
+    engine = HiveExternalEngine(spark, config)
+
+    info = engine.analyze(db, table)
+    assert info.needs_compaction, "Table should need compaction"
+    assert len(info.partition_columns) == 4, f"Expected 4 partition columns, got {info.partition_columns}"
+    assert info.partition_columns == ["year", "month", "day", "ref"]
+    n_parts = len(info.partitions)
+    print(
+        f"  analyze  → {info.total_file_count} files across {n_parts} partitions (4 levels)"
+        f" — needs_compaction={info.needs_compaction}"
+    )
+
+    _, report = _compact(engine, db, table)
+    assert report.status == CompactionStatus.COMPLETED, f"Compact failed: {report}"
+    assert report.partitions_compacted == len(combos)
+    print(
+        f"  compact  → {report.after_file_count} files after (was {report.before_file_count}),"
+        f" {report.partitions_compacted} partitions compacted"
+    )
+
+    rows_after = spark.table(full).count()
+    assert rows_after == rows_before, f"Row count changed: {rows_before} → {rows_after}"
+    print(f"  rows preserved: {rows_after} ✓")
+
+    info2 = engine.analyze(db, table)
+    assert not info2.needs_compaction, "Table should NOT need compaction after compact"
+    print(f"  re-analyze → needs_compaction={info2.needs_compaction} ✓")
+
+    engine.cleanup(db, table)
+    print("  cleanup  → done")
+
+
+# ── Scenario 7: rollback on a partitioned table ───────────────────────────────
+
+
+def test_rollback_partitioned(spark: SparkSession, warehouse: str) -> None:
+    """Compact then rollback a partitioned table: all partitions must be restored."""
+    db = "inttest_rb2"
+    table = "events_rb2"
+    full = f"{db}.{table}"
+    loc = f"{warehouse}/{db}.db/{table}"
+
+    setup_db(spark, db)
+    spark.sql(f"DROP TABLE IF EXISTS `{db}`.`{table}`")
+    spark.sql(f"""
+        CREATE EXTERNAL TABLE `{db}`.`{table}` (
+            event_id   BIGINT,
+            user_id    BIGINT,
+            event_type STRING
+        )
+        PARTITIONED BY (date STRING, ref STRING)
+        STORED AS PARQUET
+        LOCATION '{loc}'
+        TBLPROPERTIES ('external.table.purge' = 'false')
+    """)
+
+    combos = [("2024-01-01", "A"), ("2024-01-01", "B"), ("2024-01-02", "A"), ("2024-01-02", "B")]
+    total_rows = len(combos) * 200
+    for d, r in combos:
+        write_small_files(spark, f"{loc}/date={d}/ref={r}", n_rows=200, n_files=10)
+    spark.sql(f"MSCK REPAIR TABLE `{db}`.`{table}`")
+
+    rows_before = spark.table(full).count()
+    assert rows_before == total_rows, f"Expected {total_rows} rows, got {rows_before}"
+
+    config = make_config()
+    engine = HiveExternalEngine(spark, config)
+
+    info, report = _compact(engine, db, table)
+    assert report.status == CompactionStatus.COMPLETED, f"Compact failed: {report}"
+    assert report.partitions_compacted == len(combos)
+    print(f"  compact  → {report.after_file_count} files after, {report.partitions_compacted} partitions compacted")
+
+    rows_after_compact = spark.table(full).count()
+    assert rows_after_compact == rows_before, f"Row count after compact: {rows_after_compact}"
+
+    engine.rollback(db, table)
+    print("  rollback → done")
+
+    rows_after_rollback = spark.table(full).count()
+    assert rows_after_rollback == rows_before, (
+        f"Row count after rollback: {rows_after_rollback} (expected {rows_before})"
+    )
+    print(f"  rows preserved after rollback: {rows_after_rollback} ✓")
+
+
+# ── Scenario 8: analyze_after_compaction ─────────────────────────────────────
+
+
+def test_analyze_after_compaction(spark: SparkSession, warehouse: str) -> None:
+    """Compact with analyze_after_compaction=True: ANALYZE TABLE must run without error."""
+    db = "inttest_az"
+    table = "events_az"
+    full = f"{db}.{table}"
+    loc = f"{warehouse}/{db}.db/{table}"
+
+    setup_db(spark, db)
+    spark.sql(f"DROP TABLE IF EXISTS `{db}`.`{table}`")
+    spark.sql(f"""
+        CREATE EXTERNAL TABLE `{db}`.`{table}` (
+            event_id   BIGINT,
+            user_id    BIGINT,
+            event_type STRING
+        )
+        PARTITIONED BY (date STRING)
+        STORED AS PARQUET
+        LOCATION '{loc}'
+        TBLPROPERTIES ('external.table.purge' = 'false')
+    """)
+
+    dates = ["2024-01-01", "2024-01-02"]
+    for d in dates:
+        write_small_files(spark, f"{loc}/date={d}", n_rows=500, n_files=20)
+    spark.sql(f"MSCK REPAIR TABLE `{db}`.`{table}`")
+
+    rows_before = spark.table(full).count()
+    assert rows_before == 1_000
+
+    config = make_config(analyze_after_compaction=True)
+    engine = HiveExternalEngine(spark, config)
+
+    info = engine.analyze(db, table)
+    assert info.needs_compaction, "Table should need compaction"
+    print(f"  analyze  → {info.total_file_count} files — needs_compaction={info.needs_compaction}")
+
+    _, report = _compact(engine, db, table)
+    assert report.status == CompactionStatus.COMPLETED, f"Compact failed: {report}"
+    print(f"  compact + analyze stats → {report.after_file_count} files after")
+
+    rows_after = spark.table(full).count()
+    assert rows_after == rows_before, f"Row count changed: {rows_before} → {rows_after}"
+
+    info2 = engine.analyze(db, table)
+    assert not info2.needs_compaction, "Table should NOT need compaction after compact"
+    print(f"  re-analyze → needs_compaction={info2.needs_compaction} ✓")
+
+    engine.cleanup(db, table)
+    print("  cleanup  → done")
+
+
+# ── Scenario 9: sort_columns on a partitioned table ──────────────────────────
+
+
+def test_sort_columns_partitioned(spark: SparkSession, warehouse: str) -> None:
+    """Compact a partitioned table with sort_columns: rows are sorted in the output files."""
+    db = "inttest_sc"
+    table = "events_sc"
+    full = f"{db}.{table}"
+    loc = f"{warehouse}/{db}.db/{table}"
+
+    setup_db(spark, db)
+    spark.sql(f"DROP TABLE IF EXISTS `{db}`.`{table}`")
+    spark.sql(f"""
+        CREATE EXTERNAL TABLE `{db}`.`{table}` (
+            event_id   BIGINT,
+            user_id    BIGINT,
+            event_type STRING
+        )
+        PARTITIONED BY (date STRING)
+        STORED AS PARQUET
+        LOCATION '{loc}'
+        TBLPROPERTIES ('external.table.purge' = 'false')
+    """)
+
+    dates = ["2024-01-01", "2024-01-02"]
+    for d in dates:
+        write_small_files(spark, f"{loc}/date={d}", n_rows=500, n_files=20)
+    spark.sql(f"MSCK REPAIR TABLE `{db}`.`{table}`")
+
+    rows_before = spark.table(full).count()
+    assert rows_before == 1_000
+
+    config = make_config(sort_columns={f"{db}.{table}": ["event_id"]})
+    engine = HiveExternalEngine(spark, config)
+
+    info = engine.analyze(db, table)
+    assert info.needs_compaction, "Table should need compaction"
+    # sort_columns from config must be merged into table_info
+    assert info.sort_columns == ["event_id"], f"Expected sort_columns=['event_id'], got {info.sort_columns}"
+    print(f"  analyze  → {info.total_file_count} files, sort_columns={info.sort_columns}")
+
+    _, report = _compact(engine, db, table)
+    assert report.status == CompactionStatus.COMPLETED, f"Compact failed: {report}"
+    print(f"  compact  → {report.after_file_count} files after (sorted by event_id)")
+
+    rows_after = spark.table(full).count()
+    assert rows_after == rows_before, f"Row count changed: {rows_before} → {rows_after}"
+
+    # Verify sort: read one compacted partition and check event_id is non-decreasing
+    part_df = spark.read.parquet(f"{loc}/date=2024-01-01")
+    event_ids = [row["event_id"] for row in part_df.collect()]
+    assert event_ids == sorted(event_ids), "event_id is not sorted in the compacted partition"
+    print(f"  sort verified: {len(event_ids)} rows in ascending event_id order ✓")
+
+    info2 = engine.analyze(db, table)
+    assert not info2.needs_compaction
+    print(f"  re-analyze → needs_compaction={info2.needs_compaction} ✓")
+
+    engine.cleanup(db, table)
+    print("  cleanup  → done")
+
+
+# ── Scenario 10: cleanup on a partitioned table ───────────────────────────────
+
+
+def test_cleanup_partitioned(spark: SparkSession, warehouse: str) -> None:
+    """After compacting a partitioned table, cleanup removes __old_* dirs and drops the backup."""
+    db = "inttest_cl2"
+    table = "events_cl2"
+    full = f"{db}.{table}"
+    loc = f"{warehouse}/{db}.db/{table}"
+
+    setup_db(spark, db)
+    spark.sql(f"DROP TABLE IF EXISTS `{db}`.`{table}`")
+    spark.sql(f"""
+        CREATE EXTERNAL TABLE `{db}`.`{table}` (
+            event_id   BIGINT,
+            user_id    BIGINT,
+            event_type STRING
+        )
+        PARTITIONED BY (date STRING)
+        STORED AS PARQUET
+        LOCATION '{loc}'
+        TBLPROPERTIES ('external.table.purge' = 'false')
+    """)
+
+    dates = ["2024-01-01", "2024-01-02"]
+    for d in dates:
+        write_small_files(spark, f"{loc}/date={d}", n_rows=300, n_files=15)
+    spark.sql(f"MSCK REPAIR TABLE `{db}`.`{table}`")
+
+    rows_before = spark.table(full).count()
+    assert rows_before == 600
+
+    config = make_config()
+    engine = HiveExternalEngine(spark, config)
+
+    _, report = _compact(engine, db, table)
+    assert report.status == CompactionStatus.COMPLETED, f"Compact failed: {report}"
+    print(f"  compact  → {report.after_file_count} files after, {report.partitions_compacted} partitions")
+
+    # Verify __old_* directories exist before cleanup
+    # (the old dirs are siblings of partition dirs, so look at parent location level)
+    old_dirs_all = list(Path(loc).parent.rglob("*__old_*"))
+    assert len(old_dirs_all) > 0 or len(list(Path(loc).glob("date=*__old_*"))) > 0, (
+        "Expected __old_* directories to exist after compact"
+    )
+    print(f"  found {len(old_dirs_all)} __old_* path(s) before cleanup")
+
+    # Perform cleanup
+    cleaned = engine.cleanup(db, table)
+    assert cleaned >= 1, f"Expected at least 1 backup cleaned, got {cleaned}"
+    print(f"  cleanup  → {cleaned} backup(s) cleaned")
+
+    # Verify backup table is gone
+    backup_tables = [
+        row["tableName"]
+        for row in spark.sql(f"SHOW TABLES IN `{db}`").collect()
+        if row["tableName"].startswith("__bkp_")
+    ]
+    assert backup_tables == [], f"Backup tables still exist: {backup_tables}"
+    print("  backup table dropped ✓")
+
+    # Verify __old_* directories are gone
+    remaining_old = list(Path(loc).parent.rglob("*__old_*"))
+    assert remaining_old == [], f"__old_* dirs still exist: {remaining_old}"
+    print("  __old_* directories removed ✓")
+
+    # Row count still accessible and intact
+    rows_after = spark.table(full).count()
+    assert rows_after == rows_before, f"Row count changed after cleanup: {rows_before} → {rows_after}"
+    print(f"  rows intact: {rows_after} ✓")
+
+
 # ── runner ────────────────────────────────────────────────────────────────────
 
 SCENARIOS = [
-    ("Scenario 1 — Non-partitioned table", test_nonpartitioned),
-    ("Scenario 2 — Single-partition (date)", test_single_partition),
-    ("Scenario 3 — Two partitions (date+ref)", test_two_partitions),
-    ("Scenario 4 — Rollback", test_rollback),
+    ("Scenario 1  — Non-partitioned table", test_nonpartitioned),
+    ("Scenario 2  — Single-partition (date)", test_single_partition),
+    ("Scenario 3  — Two partitions (date+ref)", test_two_partitions),
+    ("Scenario 4  — Rollback (non-partitioned)", test_rollback),
+    ("Scenario 5  — Three partitions (year/month/day)", test_three_partitions),
+    ("Scenario 6  — Four partitions (year/month/day/ref)", test_four_partitions),
+    ("Scenario 7  — Rollback (partitioned 2 levels)", test_rollback_partitioned),
+    ("Scenario 8  — analyze_after_compaction", test_analyze_after_compaction),
+    ("Scenario 9  — sort_columns on partitioned table", test_sort_columns_partitioned),
+    ("Scenario 10 — Cleanup partitioned table", test_cleanup_partitioned),
 ]
 
 

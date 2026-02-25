@@ -82,6 +82,7 @@ class TableAnalyzer:
         location = self._extract_location(desc_map)
         file_format = self._detect_format(desc_map)
         partition_columns = self._detect_partition_columns(desc_rows)
+        compression_codec = self._detect_compression(desc_map, file_format)
 
         table_info = TableInfo(
             database=database,
@@ -90,6 +91,7 @@ class TableAnalyzer:
             file_format=file_format,
             is_partitioned=len(partition_columns) > 0,
             partition_columns=partition_columns,
+            compression_codec=compression_codec,
         )
 
         if table_info.is_partitioned:
@@ -297,6 +299,26 @@ class TableAnalyzer:
             if match:
                 result[match.group(1)] = match.group(2)
         return result
+
+    def _detect_compression(self, desc_map: dict[str, str], file_format: FileFormat) -> str | None:
+        """Detect compression codec from DESCRIBE FORMATTED table properties.
+
+        Hive stores the codec in TBLPROPERTIES:
+          - Parquet: ``parquet.compression`` (SNAPPY, GZIP, ZSTD, LZ4, UNCOMPRESSED)
+          - ORC:     ``orc.compress``        (SNAPPY, ZLIB, LZ4, ZSTD, NONE)
+
+        Returns the codec in lowercase (Spark's expected format), or None if the
+        property is absent (Spark will then use its session-level default).
+        """
+        if file_format == FileFormat.PARQUET:
+            raw = desc_map.get("parquet.compression", desc_map.get("parquet.compression:", ""))
+        else:
+            raw = desc_map.get("orc.compress", desc_map.get("orc.compress:", ""))
+
+        codec = raw.strip().lower() if raw.strip() else None
+        if codec:
+            logger.debug("Detected compression codec from table properties: %s", codec)
+        return codec
 
     def _determine_compaction_need(self, table_info: TableInfo) -> None:
         """Determine if a table needs compaction."""

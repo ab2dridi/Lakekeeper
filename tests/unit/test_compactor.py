@@ -444,3 +444,53 @@ class TestCompactor:
         assert "HDFS rename failed" in report.error
         # rename was attempted exactly once (the original→old step that failed)
         assert mock_hdfs_client.rename_path.call_count == 1
+
+    def test_compact_preserves_compression_codec(
+        self,
+        compactor,
+        mock_spark,
+        mock_hdfs_client,
+        sample_table_info,
+        backup_info,
+    ):
+        """When compression_codec is set on the table, .option('compression', ...) is passed to the writer."""
+        sample_table_info.compression_codec = "gzip"
+
+        mock_df = MagicMock()
+        mock_df.count.return_value = 500
+        mock_df.coalesce.return_value = mock_df
+        mock_df.write = MagicMock()
+        mock_df.write.format.return_value = mock_df.write
+        mock_df.write.mode.return_value = mock_df.write
+        mock_df.write.option.return_value = mock_df.write
+        mock_spark.read.format.return_value.load.return_value = mock_df
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=1, total_size_bytes=128 * 1024 * 1024)
+
+        report = compactor.compact_table(sample_table_info, backup_info)
+
+        assert report.status == CompactionStatus.COMPLETED
+        mock_df.write.option.assert_called_with("compression", "gzip")
+
+    def test_compact_no_compression_option_when_codec_absent(
+        self,
+        compactor,
+        mock_spark,
+        mock_hdfs_client,
+        sample_table_info,
+        backup_info,
+    ):
+        """When compression_codec is None, .option('compression') is NOT called (Spark uses its default)."""
+        assert sample_table_info.compression_codec is None  # fixture default
+
+        mock_df = MagicMock()
+        mock_df.count.return_value = 500
+        mock_df.coalesce.return_value = mock_df
+        mock_df.write = MagicMock()
+        mock_df.write.format.return_value = mock_df.write
+        mock_df.write.mode.return_value = mock_df.write
+        mock_spark.read.format.return_value.load.return_value = mock_df
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=1, total_size_bytes=128 * 1024 * 1024)
+
+        compactor.compact_table(sample_table_info, backup_info)
+
+        mock_df.write.option.assert_not_called()

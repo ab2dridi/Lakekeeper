@@ -193,6 +193,47 @@ class TestTableAnalyzer:
         assert result.database == "mydb"
 
 
+    def test_compression_codec_detected_from_parquet_property(self, analyzer, mock_spark, mock_hdfs_client):
+        """parquet.compression in TBLPROPERTIES is stored on TableInfo as lowercase."""
+        desc_rows = [
+            _make_row("Location", "hdfs:///data/mydb/tbl", None),
+            _make_row("Table Type", "EXTERNAL_TABLE", None),
+            _make_row("InputFormat", "org.apache.hadoop.hive.ql.io.parquet.MapRedParquetInputFormat", None),
+            _make_row("parquet.compression", "GZIP", None),
+        ]
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=1024)
+
+        result = analyzer.analyze_table("mydb", "tbl")
+        assert result.compression_codec == "gzip"
+
+    def test_compression_codec_detected_from_orc_property(self, analyzer, mock_spark, mock_hdfs_client):
+        """orc.compress in TBLPROPERTIES is stored on TableInfo as lowercase."""
+        desc_rows = [
+            _make_row("Location", "hdfs:///data/mydb/tbl", None),
+            _make_row("Table Type", "EXTERNAL_TABLE", None),
+            _make_row("InputFormat", "org.apache.hadoop.hive.ql.io.orc.OrcInputFormat", None),
+            _make_row("orc.compress", "ZLIB", None),
+        ]
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=1024)
+
+        result = analyzer.analyze_table("mydb", "tbl")
+        assert result.compression_codec == "zlib"
+
+    def test_compression_codec_none_when_absent(self, analyzer, mock_spark, mock_hdfs_client):
+        """When no compression property is in TBLPROPERTIES, codec is None (Spark uses its default)."""
+        desc_rows = [
+            _make_row("Location", "hdfs:///data/mydb/tbl", None),
+            _make_row("Table Type", "EXTERNAL_TABLE", None),
+            _make_row("InputFormat", "org.apache.hadoop.hive.ql.io.parquet.MapRedParquetInputFormat", None),
+        ]
+        mock_spark.sql.return_value.collect.return_value = desc_rows
+        mock_hdfs_client.get_file_info.return_value = HdfsFileInfo(file_count=10, total_size_bytes=1024)
+
+        result = analyzer.analyze_table("mydb", "tbl")
+        assert result.compression_codec is None
+
     def test_two_level_partition_detected_from_describe(self, analyzer, mock_spark, mock_hdfs_client):
         """Two-level partition (date+ref) detected correctly from DESCRIBE FORMATTED."""
         desc_rows = [

@@ -107,7 +107,16 @@ pip install lakekeeper
 conda-pack -o lakekeeper_env.tar.gz
 ```
 
-**Step 2 — Write a config file**
+**Step 2 — Generate a starter config file**
+
+```bash
+# Generate a commented template (then edit the values for your cluster)
+lakekeeper generate-config --output lakekeeper.yaml
+```
+
+Or copy [`lakekeeper.example.yaml`](lakekeeper.example.yaml) from the repository root.
+
+**Step 2b — Edit the config file**
 
 ```yaml
 # lakekeeper.yaml
@@ -197,10 +206,11 @@ Options:
   --help                  Show help and exit.
 
 Commands:
-  analyze   Analyze tables and report compaction needs (dry-run, no writes).
-  compact   Compact Hive external tables.
-  rollback  Rollback a table to its pre-compaction state.
-  cleanup   Remove backup tables and reclaim HDFS space.
+  analyze          Analyze tables and report compaction needs (dry-run, no writes).
+  compact          Compact Hive external tables.
+  rollback         Rollback a table to its pre-compaction state.
+  cleanup          Remove backup tables and reclaim HDFS space.
+  generate-config  Generate a commented lakekeeper.yaml configuration template.
 ```
 
 > **`--config-file` placement:** Pass it before the subcommand name:

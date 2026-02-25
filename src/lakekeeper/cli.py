@@ -354,7 +354,10 @@ def analyze(ctx: click.Context, **kwargs: str | None) -> None:
     "--sort-columns",
     "sort_columns_str",
     default=None,
-    help="Sort columns before coalescing (comma-separated, e.g. 'date,user_id'). Only applies when --table is used.",
+    help=(
+        "Sort columns before coalescing (comma-separated, e.g. 'date,user_id'). "
+        "Only applies when --table is used; silently ignored with --database or --tables."
+    ),
 )
 @click.option(
     "--analyze-stats/--no-analyze-stats",

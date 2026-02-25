@@ -544,3 +544,62 @@ class TestCompactor:
         compactor.compact_table(sample_table_info, backup_info)
 
         mock_df.sort.assert_not_called()
+
+    def test_compact_partitioned_all_partitions_skipped(
+        self,
+        compactor,
+        mock_spark,
+        mock_hdfs_client,
+        mock_backup_mgr,
+    ):
+        """When all partitions have needs_compaction=False, result is SKIPPED with no division by zero."""
+        from lakekeeper.models import FileFormat, PartitionInfo, TableInfo
+
+        table_info = TableInfo(
+            database="mydb",
+            table_name="logs",
+            location="hdfs:///data/mydb/logs",
+            file_format=FileFormat.ORC,
+            is_partitioned=True,
+            partition_columns=["year", "month"],
+            partitions=[
+                PartitionInfo(
+                    spec={"year": "2024", "month": "01"},
+                    location="hdfs:///data/mydb/logs/year=2024/month=01",
+                    file_count=3,
+                    total_size_bytes=500 * 1024 * 1024,
+                    needs_compaction=False,
+                    target_files=4,
+                ),
+                PartitionInfo(
+                    spec={"year": "2024", "month": "02"},
+                    location="hdfs:///data/mydb/logs/year=2024/month=02",
+                    file_count=2,
+                    total_size_bytes=400 * 1024 * 1024,
+                    needs_compaction=False,
+                    target_files=3,
+                ),
+            ],
+            total_file_count=5,
+            total_size_bytes=900 * 1024 * 1024,
+            needs_compaction=False,
+        )
+        backup_info = BackupInfo(
+            original_table="mydb.logs",
+            backup_table="mydb.__bkp_logs_20240101_120000",
+            original_location="hdfs:///data/mydb/logs",
+            timestamp=datetime(2024, 1, 1, 12, 0, 0),
+            partition_locations={},
+        )
+
+        report = compactor.compact_table(table_info, backup_info)
+
+        # All partitions skipped → COMPLETED with zero compacted partitions and no error
+        assert report.status == CompactionStatus.COMPLETED
+        assert report.partitions_compacted == 0
+        assert report.partitions_skipped == 2
+        # Skipped partitions still count toward after_file_count (3 + 2 = 5)
+        assert report.after_file_count == 5
+        # No rename or write should have occurred
+        mock_hdfs_client.rename_path.assert_not_called()
+        mock_spark.read.format.return_value.load.assert_not_called()

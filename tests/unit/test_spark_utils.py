@@ -103,6 +103,28 @@ class TestBuildSparkSubmitCommand:
         assert "--num-executors" not in cmd
         assert "--files" not in cmd
 
+    def test_py_files(self):
+        cfg = SparkSubmitConfig(
+            enabled=True,
+            py_files=["/opt/mypackage.whl", "/opt/other.whl"],
+        )
+        cmd = build_spark_submit_command(cfg, [])
+        assert "--py-files" in cmd
+        py_idx = cmd.index("--py-files")
+        assert cmd[py_idx + 1] == "/opt/mypackage.whl,/opt/other.whl"
+
+    def test_deploy_mode_cluster(self):
+        cfg = SparkSubmitConfig(enabled=True, deploy_mode="cluster")
+        cmd = build_spark_submit_command(cfg, [])
+        assert "--deploy-mode" in cmd
+        dm_idx = cmd.index("--deploy-mode")
+        assert cmd[dm_idx + 1] == "cluster"
+
+    def test_submit_command_custom(self):
+        cfg = SparkSubmitConfig(enabled=True, submit_command="spark3-submit")
+        cmd = build_spark_submit_command(cfg, [])
+        assert cmd[0] == "spark3-submit"
+
 
 class TestGetOrCreateSparkSession:
     def _setup_mock_pyspark(self):

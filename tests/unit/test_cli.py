@@ -709,3 +709,134 @@ class TestAnalyzeStatsFlag:
 
         called_config = mock_get_engine.call_args[0][0]
         assert called_config.analyze_after_compaction is True
+
+
+class TestGenerateConfigCommand:
+    """Tests for the generate-config CLI command."""
+
+    def test_default_output_file_created(self, tmp_path):
+        runner = CliRunner()
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(main, ["generate-config"])
+        assert result.exit_code == 0
+        assert "lakekeeper.yaml" in result.output
+
+    def test_custom_output_path(self, tmp_path):
+        output = tmp_path / "my_config.yaml"
+        runner = CliRunner()
+        result = runner.invoke(main, ["generate-config", "--output", str(output)])
+        assert result.exit_code == 0
+        assert output.exists()
+        assert str(output) in result.output
+
+    def test_short_output_flag(self, tmp_path):
+        output = tmp_path / "cfg.yaml"
+        runner = CliRunner()
+        result = runner.invoke(main, ["generate-config", "-o", str(output)])
+        assert result.exit_code == 0
+        assert output.exists()
+
+    def test_error_if_file_exists_without_force(self, tmp_path):
+        output = tmp_path / "lakekeeper.yaml"
+        output.write_text("existing content")
+        runner = CliRunner()
+        result = runner.invoke(main, ["generate-config", "--output", str(output)])
+        assert result.exit_code != 0
+        assert "already exists" in result.output
+
+    def test_force_overwrites_existing_file(self, tmp_path):
+        output = tmp_path / "lakekeeper.yaml"
+        output.write_text("old content")
+        runner = CliRunner()
+        result = runner.invoke(main, ["generate-config", "--output", str(output), "--force"])
+        assert result.exit_code == 0
+        assert "old content" not in output.read_text()
+
+    def test_force_short_flag(self, tmp_path):
+        output = tmp_path / "lakekeeper.yaml"
+        output.write_text("old")
+        runner = CliRunner()
+        result = runner.invoke(main, ["generate-config", "-o", str(output), "-f"])
+        assert result.exit_code == 0
+
+    def test_content_contains_key_fields(self, tmp_path):
+        output = tmp_path / "lakekeeper.yaml"
+        runner = CliRunner()
+        runner.invoke(main, ["generate-config", "--output", str(output)])
+        content = output.read_text()
+        assert "block_size_mb" in content
+        assert "compaction_ratio_threshold" in content
+        assert "backup_prefix" in content
+        assert "spark_submit" in content
+        assert "sort_columns" in content
+
+
+class TestSortColumnsFlag:
+    """Tests for --sort-columns CLI flag on compact."""
+
+    @patch("lakekeeper.cli._get_engine")
+    def test_sort_columns_with_table_sets_config(self, mock_get_engine):
+        """--sort-columns with --table populates config.sort_columns."""
+        from lakekeeper.models import FileFormat, TableInfo
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.analyze.return_value = TableInfo(
+            database="mydb",
+            table_name="tbl",
+            location="hdfs:///data",
+            file_format=FileFormat.PARQUET,
+            needs_compaction=False,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["compact", "--table", "mydb.tbl", "--sort-columns", "date,user_id"])
+        assert result.exit_code == 0
+
+        called_config = mock_get_engine.call_args[0][0]
+        assert called_config.sort_columns.get("mydb.tbl") == ["date", "user_id"]
+
+    @patch("lakekeeper.cli._get_engine")
+    def test_sort_columns_ignored_with_database(self, mock_get_engine):
+        """--sort-columns is silently ignored when --database is used."""
+        from lakekeeper.models import FileFormat, TableInfo
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.list_tables.return_value = ["tbl"]
+        mock_engine.analyze.return_value = TableInfo(
+            database="mydb",
+            table_name="tbl",
+            location="hdfs:///data",
+            file_format=FileFormat.PARQUET,
+            needs_compaction=False,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["compact", "--database", "mydb", "--sort-columns", "date,user_id"])
+        assert result.exit_code == 0
+
+        called_config = mock_get_engine.call_args[0][0]
+        assert "mydb.tbl" not in called_config.sort_columns
+
+    @patch("lakekeeper.cli._get_engine")
+    def test_sort_columns_ignored_with_tables(self, mock_get_engine):
+        """--sort-columns is silently ignored when --tables is used."""
+        from lakekeeper.models import FileFormat, TableInfo
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+        mock_engine.analyze.return_value = TableInfo(
+            database="mydb",
+            table_name="tbl",
+            location="hdfs:///data",
+            file_format=FileFormat.PARQUET,
+            needs_compaction=False,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["compact", "--tables", "mydb.tbl", "--sort-columns", "date"])
+        assert result.exit_code == 0
+
+        called_config = mock_get_engine.call_args[0][0]
+        assert "mydb.tbl" not in called_config.sort_columns
